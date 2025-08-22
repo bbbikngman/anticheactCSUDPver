@@ -13,6 +13,7 @@ import time
 from typing import Dict, Tuple
 
 import numpy as np
+import struct
 
 import whisper.config as config
 from adpcm_codec import ADPCMCodec, ADPCMProtocol
@@ -99,7 +100,8 @@ class UDPVoiceServer:
             mp3_bytes = self.tts_udp.generate_mp3_from_stream(opening_stream)
             if mp3_bytes:
                 print(f"开场白 MP3 大小: {len(mp3_bytes)} 字节")
-                self._send_mp3_safe(addr, mp3_bytes)
+                # 直接分片发送以匹配客户端按片播放
+                self._send_large_mp3(addr, mp3_bytes)
         except Exception as e:
             print(f"开场白发送失败: {e}")
 
@@ -119,7 +121,8 @@ class UDPVoiceServer:
                 print(f"MP3 发送失败: {e}")
 
     def _send_large_mp3(self, addr: Tuple[str,int], mp3_bytes: bytes):
-        """分片发送大的 MP3 文件"""
+        """分片发送大的 MP3 文件（带序号）"""
+        import struct
         chunk_size = 50000  # 50KB 每片
         total_chunks = (len(mp3_bytes) + chunk_size - 1) // chunk_size
 
@@ -129,7 +132,10 @@ class UDPVoiceServer:
             chunk = mp3_bytes[start:end]
 
             try:
-                down = ADPCMProtocol.pack_audio_packet(chunk, ADPCMProtocol.COMPRESSION_TTS_MP3)
+                # 在负载前添加 4 字节的分片头: [uint16 总片数][uint16 当前序号(从1开始)]
+                header = struct.pack('!HH', total_chunks, i + 1)
+                payload = header + chunk
+                down = ADPCMProtocol.pack_audio_packet(payload, ADPCMProtocol.COMPRESSION_TTS_MP3)
                 self.sock.sendto(down, addr)
                 print(f"发送片段 {i+1}/{total_chunks} 给 {addr}")
                 time.sleep(0.01)  # 小延迟避免丢包

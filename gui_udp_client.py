@@ -14,6 +14,7 @@ import queue
 import tempfile
 import os
 import logging
+import json
 
 import numpy as np
 import sounddevice as sd
@@ -21,14 +22,49 @@ from tkinter import Tk, Button, Text, END, DISABLED, NORMAL, PhotoImage
 
 from adpcm_codec import ADPCMCodec, ADPCMProtocol
 
-SERVER_IP = "127.0.0.1"
-SERVER_PORT = 31000
-MAX_UDP = 65507
+def load_config(config_file="client_config.json"):
+    """加载配置文件"""
+    try:
+        with open(config_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"配置文件 {config_file} 不存在，使用默认配置")
+        return {
+            "server": {"ip": "127.0.0.1", "port": 31000},
+            "audio": {"sample_rate": 16000, "channels": 1, "chunk_size": 512},
+            "network": {"max_udp_size": 65507, "timeout": 5.0},
+            "ui": {"window_title": "反作弊语音客户端", "window_size": "600x500"},
+            "logging": {"level": "INFO", "file": "logs/client.log", "console": True}
+        }
+    except json.JSONDecodeError as e:
+        print(f"配置文件格式错误: {e}")
+        return load_config()  # 返回默认配置
+
+# 加载配置
+CONFIG = load_config()
 
 class GUIClient:
-    def __init__(self, server_ip: str = SERVER_IP, server_port: int = SERVER_PORT):
-        self.server = (server_ip, server_port)
+    def __init__(self, config=None):
+        if config is None:
+            config = CONFIG
+
+        # 服务器配置
+        self.server = (config["server"]["ip"], config["server"]["port"])
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        # 音频配置
+        self.sample_rate = config["audio"]["sample_rate"]
+        self.channels = config["audio"]["channels"]
+        self.chunk_size = config["audio"]["chunk_size"]
+
+        # 网络配置
+        self.max_udp_size = config["network"]["max_udp_size"]
+        self.timeout = config["network"]["timeout"]
+
+        # UI配置
+        self.window_title = config["ui"]["window_title"]
+        self.window_size = config["ui"]["window_size"]
+
         self.codec = ADPCMCodec()
         self.running = False
         self.stream = None
@@ -37,9 +73,11 @@ class GUIClient:
         self.last_mp3_time = 0  # 最后收到 MP3 片段的时间
 
         # 日志到文件
-        os.makedirs('logs', exist_ok=True)
-        logging.basicConfig(filename=os.path.join('logs', 'client.log'),
-                            level=logging.INFO,
+        log_dir = os.path.dirname(config["logging"]["file"])
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        logging.basicConfig(filename=config["logging"]["file"],
+                            level=getattr(logging, config["logging"]["level"]),
                             format='%(asctime)s %(levelname)s %(message)s')
 
         # 接收线程
@@ -55,28 +93,14 @@ class GUIClient:
         while True:
             try:
                 self.sock.settimeout(2.0)
-                pkt, _ = self.sock.recvfrom(MAX_UDP)
+                pkt, _ = self.sock.recvfrom(self.max_udp_size)
                 t, payload = ADPCMProtocol.unpack_audio_packet(pkt)
                 if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
-                    current_time = time.time()
+                    self.log(f"📥 收到 MP3片段: {len(payload)} 字节")
 
-                    # 如果距离上次收到片段超过 2 秒，清空缓冲区（新的 MP3 开始）
-                    if current_time - self.last_mp3_time > 2.0:
-                        self.mp3_buffer = b""
-
-                    self.last_mp3_time = current_time
-                    self.mp3_buffer += payload
-
-                    self.log(f"收到 MP3 片段: {len(payload)} 字节，总计: {len(self.mp3_buffer)} 字节")
-
-                    # 检查是否是完整的 MP3
-                    if self._is_complete_mp3(self.mp3_buffer):
-                        self.log(f"MP3 接收完成，开始播放: {len(self.mp3_buffer)} 字节")
-                        self._play_mp3_bytes(self.mp3_buffer)
-                        self.mp3_buffer = b""  # 清空缓冲区
-                    else:
-                        # 设置超时，如果 1 秒内没有新片段就尝试播放
-                        threading.Timer(1.0, self._try_play_buffered_mp3).start()
+                    # 简单直接：收到就播放
+                    self.log(f"🎵 立即播放MP3片段: {len(payload)} 字节")
+                    self._play_mp3_bytes(payload)
                 backoff = 0.1
             except socket.timeout:
                 # 静音时没有回复是正常的
@@ -87,62 +111,166 @@ class GUIClient:
                 backoff = min(backoff * 2, 2.0)
 
     def _play_mp3_bytes(self, audio_bytes: bytes):
+        self.log(f"🔊 开始播放MP3，大小: {len(audio_bytes)} 字节")
         try:
+            # 创建临时文件
             with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
                 tmp.write(audio_bytes)
+                tmp.flush()  # 确保数据写入磁盘
                 path = tmp.name
+
+            self.log(f"📁 临时文件创建: {path}")
+
             try:
                 import pygame
+
+                # 重新初始化mixer，确保干净状态
+                if pygame.mixer.get_init():
+                    pygame.mixer.quit()
+
+                # 初始化音频系统
+                pygame.mixer.pre_init(frequency=22050, size=-16, channels=2, buffer=1024)
                 pygame.mixer.init()
+                self.log("🎵 pygame mixer 初始化成功")
+
+                # 加载并播放
                 pygame.mixer.music.load(path)
                 pygame.mixer.music.play()
+                self.log("▶️ 开始播放音频...")
+
+                # 等待播放完成
+                play_start = time.time()
                 while pygame.mixer.music.get_busy():
-                    time.sleep(0.05)
+                    time.sleep(0.1)
+                    # 防止无限等待
+                    if time.time() - play_start > 30:
+                        self.log("⚠️ 播放超时，强制停止")
+                        pygame.mixer.music.stop()
+                        break
+
+                self.log("✅ 音频播放完成")
+
+                # 确保pygame完全释放文件
+                pygame.mixer.music.unload()
+                time.sleep(0.1)  # 给系统一点时间释放文件句柄
+
+            except Exception as e:
+                self.log(f"❌ pygame播放错误: {e}")
+                # 尝试备用播放方法
+                self._try_alternative_play(path)
+
             finally:
+                # 清理临时文件
                 try:
-                    os.unlink(path)
-                except:
-                    pass
+                    if os.path.exists(path):
+                        os.unlink(path)
+                        self.log(f"🗑️ 临时文件已删除: {path}")
+                except Exception as e:
+                    self.log(f"⚠️ 删除临时文件失败: {e}")
+
         except Exception as e:
-            self.log(f"play mp3 error: {e}")
+            self.log(f"❌ MP3播放总体错误: {e}")
+            import traceback
+            self.log(f"详细错误: {traceback.format_exc()}")
+
+    def _try_alternative_play(self, file_path):
+        """备用播放方法"""
+        try:
+            import subprocess
+            import platform
+
+            system = platform.system().lower()
+            self.log(f"🔄 尝试系统播放器，系统: {system}")
+
+            if system == "windows":
+                # Windows: 使用系统默认播放器
+                os.startfile(file_path)
+                self.log("🎵 使用Windows默认播放器")
+            elif system == "darwin":  # macOS
+                subprocess.run(["afplay", file_path], check=True)
+                self.log("🎵 使用macOS afplay")
+            else:  # Linux
+                # 尝试多个Linux播放器
+                players = ["mpg123", "mplayer", "vlc", "paplay"]
+                for player in players:
+                    try:
+                        subprocess.run([player, file_path], check=True, timeout=30)
+                        self.log(f"🎵 使用{player}播放成功")
+                        return
+                    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                        continue
+                self.log("❌ 所有备用播放器都失败")
+
+        except Exception as e:
+            self.log(f"❌ 备用播放方法失败: {e}")
 
     def _is_complete_mp3(self, data: bytes) -> bool:
-        """检查是否是完整的 MP3 文件"""
-        if len(data) < 10:
+        """检查是否是完整的 MP3 文件（非常宽松）"""
+        if len(data) < 50:  # 至少50字节
             return False
 
         # 检查 MP3 头部标识
         has_id3 = data[:3] == b'ID3'
         has_mp3_frame = data[:2] == b'\xff\xfb' or data[:2] == b'\xff\xfa'
 
+        # 非常宽松的检测条件
         if has_id3 or has_mp3_frame:
-            # 如果数据足够大，认为可能是完整的
-            if len(data) > 5000:  # 至少 5KB
+            # 如果有MP3标识且数据大于500字节，就认为可以播放
+            if len(data) > 500:  # 进一步降低到500字节
+                self.log(f"✅ MP3可播放: {len(data)} 字节 ({'ID3' if has_id3 else 'MP3帧'})")
                 return True
 
-        # 检查是否包含 MP3 结束标识或足够大
-        return len(data) > 50000  # 如果超过 50KB，强制播放
+        # 如果数据超过5KB，强制播放（大幅降低阈值）
+        if len(data) > 5000:
+            self.log(f"✅ 强制播放: {len(data)} 字节")
+            return True
+
+        # 如果数据看起来像音频数据，也尝试播放
+        if len(data) > 1000 and (b'LAME' in data or b'Xing' in data):
+            self.log(f"✅ 检测到音频编码器标识: {len(data)} 字节")
+            return True
+
+        return False
 
     def _try_play_buffered_mp3(self):
         """尝试播放缓冲区中的 MP3（超时机制）"""
-        if len(self.mp3_buffer) > 1000:  # 至少有一些数据
+        if len(self.mp3_buffer) > 1000:  # 至少1KB才播放
             current_time = time.time()
-            # 如果距离最后一个片段超过 1 秒，尝试播放
-            if current_time - self.last_mp3_time >= 1.0:
-                self.log(f"超时播放缓冲的 MP3: {len(self.mp3_buffer)} 字节")
+            # 如果距离最后一个片段超过 1.5 秒，播放缓冲的内容
+            if current_time - self.last_mp3_time >= 1.5:
+                self.log(f"⏰ 超时播放缓冲MP3: {len(self.mp3_buffer)} 字节")
                 self._play_mp3_bytes(self.mp3_buffer)
                 self.mp3_buffer = b""
+            else:
+                # 继续等待
+                threading.Timer(0.5, self._try_play_buffered_mp3).start()
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
-            self.log(str(status))
+            self.log(f"🎤 音频状态: {status}")
+
         block = indata.flatten().astype(np.float32)
+
+        # 检测音频强度（减少日志）
+        volume = np.sqrt(np.mean(block**2))
+
         try:
             compressed = self.codec.encode(block)
             pkt = ADPCMProtocol.pack_audio_packet(compressed, ADPCMProtocol.COMPRESSION_ADPCM)
             self.sock.sendto(pkt, self.server)
+
+            # 减少日志频率
+            if hasattr(self, '_send_count'):
+                self._send_count += 1
+            else:
+                self._send_count = 1
+
+            # 只在有声音且每500个包时记录一次
+            if volume > 0.02 and self._send_count % 500 == 0:
+                self.log(f"🎤 音频活跃，已发送 {self._send_count} 包")
+
         except Exception as e:
-            self.log(f"发送失败: {e}")
+            self.log(f"❌ 音频发送失败: {e}")
 
     def start_stream(self):
         if self.running:
@@ -152,7 +280,13 @@ class GUIClient:
             hello_pkt = ADPCMProtocol.pack_control(ADPCMProtocol.CONTROL_HELLO)
             self.sock.sendto(hello_pkt, self.server)
 
-            self.stream = sd.InputStream(dtype='float32', channels=1, samplerate=16000, blocksize=512, callback=self._audio_callback)
+            self.stream = sd.InputStream(
+                dtype='float32',
+                channels=self.channels,
+                samplerate=self.sample_rate,
+                blocksize=self.chunk_size,
+                callback=self._audio_callback
+            )
             self.stream.start()
             self.running = True
             self.log("🎙️ 已开始采集，等待开场白...")
@@ -183,9 +317,10 @@ class GUIClient:
 
 def run_gui():
     app = GUIClient()
-    
-    root = Tk(); root.title("反诈AI 客户端")
-    root.geometry("420x280")
+
+    root = Tk()
+    root.title(app.window_title)
+    root.geometry(app.window_size)
 
     # 设置窗口图标（可选）
     try:

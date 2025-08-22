@@ -1,0 +1,26 @@
+{
+    "server": {
+        "ip": "47.239.226.21",
+        "port": 31000
+    },
+    "audio": {
+        "sample_rate": 16000,
+        "channels": 1,
+        "chunk_size": 512,
+        "device_id": null
+    },
+    "network": {
+        "max_udp_size": 65507,
+        "timeout": 5.0
+    },
+    "ui": {
+        "window_title": "反作弊语音客户端",
+        "window_size": "600x500",
+        "log_lines": 20
+    },
+    "logging": {
+        "level": "INFO",
+        "file": "logs/client.log",
+        "console": true
+    }
+}
