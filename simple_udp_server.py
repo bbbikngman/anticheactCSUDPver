@@ -60,6 +60,25 @@ class UDPVoiceServer:
 
         self.running = True
 
+        # 初始化数据结构与模块（确保即使未调用清理函数也已就绪）
+        self.client_codecs: Dict[Tuple[str,int], ADPCMCodec] = {}
+        self.client_queues: Dict[Tuple[str,int], queue.Queue] = {}
+        self.client_handlers: Dict[Tuple[str,int], AudioHandler] = {}
+        self.client_ai: Dict[Tuple[str,int], KimiAI] = {}
+
+        # 共享模块
+        self.vad = VADModule(config.VAD_SENSITIVITY)
+        self.transcriber = Transcriber(config.WHISPER_MODEL_SIZE, config.DEVICE)
+        self.tts_udp = TTSModuleUDPAdapter()
+
+        # 处理线程
+        self.recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
+        self.proc_thread = threading.Thread(target=self._process_loop, daemon=True)
+
+        # 会话管理
+        self.client_last_activity = {}
+        self.client_welcomed = set()
+
     def _kill_existing_process(self, port: int):
         """尝试杀死占用指定端口的进程"""
         import subprocess
