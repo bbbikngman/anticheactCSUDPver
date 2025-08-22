@@ -1,7 +1,7 @@
 # 部署 SSH 密钥到服务器脚本
 # 使用方法: .\deploy_ssh_key.ps1
 
-$SERVER_IP = "47.238.82.128"
+$SERVER_IP = "47.239.226.21"
 $SERVER_KEY = "hellokey.pem"
 $PRIVATE_KEY = "github_key"
 $PUBLIC_KEY = "github_key.pub"

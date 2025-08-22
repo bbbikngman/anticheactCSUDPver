@@ -45,6 +45,46 @@ class TTSModuleUDPAdapter:
         # 若切分为空，回退为原文
         return [s for s in sentences if s.strip()] or [text]
 
+    def _tts_bytes_with_size_limit(self, text: str, max_bytes: int = 60000):
+        """
+        生成不超过 max_bytes 的 MP3 片段；若超限则按文本再细分并递归生成。
+        返回: List[bytes]
+        """
+        if not text.strip():
+            return []
+        b = asyncio.run(self._edge_tts_bytes_async(text))
+        if len(b) <= max_bytes:
+            return [b] if b else []
+        # 超限，进一步把文本切小再生成
+        # 优先在中间附近的标点或空格处分割
+        mid = max(1, len(text) // 2)
+        seps = ['。','！','？','!','?','，',',','；',';','、',' ']
+        split_pos = -1
+        # 向左找
+        for sep in seps:
+            p = text.rfind(sep, 0, mid)
+            if p != -1:
+                split_pos = max(split_pos, p)
+        if split_pos == -1:
+            # 向右找
+            for sep in seps:
+                p = text.find(sep, mid)
+                if p != -1:
+                    split_pos = p
+                    break
+        if split_pos == -1:
+            split_pos = mid
+        left = text[:split_pos+1].strip()
+        right = text[split_pos+1:].strip()
+        # 防止死循环：如果无法有效分割，进行粗暴均分
+        if not left or not right:
+            left = text[:mid]
+            right = text[mid:]
+        res = []
+        res.extend(self._tts_bytes_with_size_limit(left, max_bytes))
+        res.extend(self._tts_bytes_with_size_limit(right, max_bytes))
+        return res
+
     def generate_mp3_from_stream(self, text_stream) -> bytes:
         # 保持原有接口：整段返回
         text = "".join(part for part in text_stream)
@@ -60,8 +100,8 @@ class TTSModuleUDPAdapter:
         segs = self._split_sentences(text)
         mp3_list = []
         for s in segs:
-            b = asyncio.run(self._edge_tts_bytes_async(s))
-            if b:
-                mp3_list.append(b)
+            # 确保每个片段都不超过 UDP 安全上限
+            seg_bytes_list = self._tts_bytes_with_size_limit(s, max_bytes=58000)
+            mp3_list.extend(seg_bytes_list)
         return mp3_list
 

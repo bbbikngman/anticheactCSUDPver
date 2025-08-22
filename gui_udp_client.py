@@ -84,49 +84,28 @@ class GUIClient:
         # 接收线程
         self.recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
 
+        # 播放队列（解决播放阻塞接收的问题）
+        self.play_queue = queue.Queue()
+        self.player_thread = threading.Thread(target=self._player_loop, daemon=True)
+
     def log(self, msg: str):
         print(msg)
         logging.info(msg)
         self.log_queue.put(msg)
 
     def _recv_loop(self):
+        self.log("📡 接收线程已启动，开始监听UDP包...")
         backoff = 0.1
         while True:
             try:
                 self.sock.settimeout(2.0)
-                pkt, _ = self.sock.recvfrom(self.max_udp_size)
+                pkt, addr = self.sock.recvfrom(self.max_udp_size)
                 t, payload = ADPCMProtocol.unpack_audio_packet(pkt)
+                self.log(f"📦 收到UDP包: 类型={t}, 大小={len(payload)}, 来源={addr}")
                 if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
-                    # 兼容两种格式：
-                    # A) 直接MP3字节（单包）
-                    # B) 自定义分片头: [uint16 总片数][uint16 当前序号] + MP3数据
-                    import struct
-                    now = time.time()
-                    if len(payload) >= 4:
-                        total, idx = struct.unpack('!HH', payload[:4])
-                        # 合法分片范围（1..200），否则当作无分片
-                        if 1 <= total <= 200 and 1 <= idx <= total:
-                            data = payload[4:]
-                            # 初始化/复用分片状态
-                            state = getattr(self, '_frag_state', None)
-                            if not state or (state.get('total', 0) != total) or (now - state.get('start', 0) > 3.0):
-                                state = {'total': total, 'parts': {}, 'start': now}
-                                self._frag_state = state
-                            # 写入分片（不清空旧分片，防止先到2/2后到1/2被清空）
-                            state['parts'][idx] = data
-                            self.log(f"📥 分片 {idx}/{total} 到达，已收 {len(state['parts'])}/{total}")
-                            # 如果收齐，按序合并播放
-                            if len(state['parts']) == total and total > 1:
-                                ordered = b"".join(state['parts'][i] for i in range(1, total+1))
-                                self.log(f"🎵 分片齐全，合并播放，总大小:{len(ordered)}")
-                                self._play_mp3_bytes(ordered)
-                                self._frag_state = None
-                            # 单片总数=1的情况
-                            if total == 1:
-                                self._play_mp3_bytes(data)
-                            continue
-                    # 无分片头或不合法：直接当作完整MP3播放
-                    self._play_mp3_bytes(payload)
+                    # 统一协议：每个UDP负载即为可独立播放的MP3片段
+                    self.log(f"📤 收到MP3片段，大小: {len(payload)} 字节")
+                    self.play_queue.put(payload)
                 backoff = 0.1
             except socket.timeout:
                 # 静音时没有回复是正常的
@@ -135,6 +114,33 @@ class GUIClient:
                 self.log(f"client recv error: {e}")
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 2.0)
+
+    def _player_loop(self):
+        """独立播放线程：轮询队列，播放完一个再取下一个"""
+        self.log("🎵 播放线程已启动，等待队列中的MP3...")
+        while True:
+            try:
+                # 阻塞等待队列中的MP3
+                self.log(f"📥 等待队列中的MP3... (当前队列大小: {self.play_queue.qsize()})")
+                audio_bytes = self.play_queue.get()
+                if audio_bytes is None:  # 退出信号
+                    self.log("🛑 收到退出信号，播放线程结束")
+                    break
+
+                self.log(f"📥 从队列取出MP3: {len(audio_bytes)} 字节")
+
+                # 播放这个MP3（阻塞直到播放完成）
+                self._play_mp3_bytes(audio_bytes)
+
+                # 播放完成，继续轮询下一个
+                self.play_queue.task_done()
+                self.log("✅ 播放完成，继续等待下一个...")
+
+            except Exception as e:
+                self.log(f"❌ 播放线程错误: {e}")
+                import traceback
+                self.log(f"详细错误: {traceback.format_exc()}")
+                time.sleep(0.1)
 
     def _play_mp3_bytes(self, audio_bytes: bytes):
         self.log(f"🔊 开始播放MP3，大小: {len(audio_bytes)} 字节")
@@ -230,46 +236,6 @@ class GUIClient:
         except Exception as e:
             self.log(f"❌ 备用播放方法失败: {e}")
 
-    def _is_complete_mp3(self, data: bytes) -> bool:
-        """检查是否是完整的 MP3 文件（非常宽松）"""
-        if len(data) < 50:  # 至少50字节
-            return False
-
-        # 检查 MP3 头部标识
-        has_id3 = data[:3] == b'ID3'
-        has_mp3_frame = data[:2] == b'\xff\xfb' or data[:2] == b'\xff\xfa'
-
-        # 非常宽松的检测条件
-        if has_id3 or has_mp3_frame:
-            # 如果有MP3标识且数据大于500字节，就认为可以播放
-            if len(data) > 500:  # 进一步降低到500字节
-                self.log(f"✅ MP3可播放: {len(data)} 字节 ({'ID3' if has_id3 else 'MP3帧'})")
-                return True
-
-        # 如果数据超过5KB，强制播放（大幅降低阈值）
-        if len(data) > 5000:
-            self.log(f"✅ 强制播放: {len(data)} 字节")
-            return True
-
-        # 如果数据看起来像音频数据，也尝试播放
-        if len(data) > 1000 and (b'LAME' in data or b'Xing' in data):
-            self.log(f"✅ 检测到音频编码器标识: {len(data)} 字节")
-            return True
-
-        return False
-
-    def _try_play_buffered_mp3(self):
-        """尝试播放缓冲区中的 MP3（超时机制）"""
-        if len(self.mp3_buffer) > 1000:  # 至少1KB才播放
-            current_time = time.time()
-            # 如果距离最后一个片段超过 1.5 秒，播放缓冲的内容
-            if current_time - self.last_mp3_time >= 1.5:
-                self.log(f"⏰ 超时播放缓冲MP3: {len(self.mp3_buffer)} 字节")
-                self._play_mp3_bytes(self.mp3_buffer)
-                self.mp3_buffer = b""
-            else:
-                # 继续等待
-                threading.Timer(0.5, self._try_play_buffered_mp3).start()
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status:
@@ -395,6 +361,7 @@ def run_gui():
     root.protocol("WM_DELETE_WINDOW", on_close)
     pump_logs()
     app.recv_thread.start()
+    app.player_thread.start()
     root.mainloop()
 
 if __name__ == "__main__":

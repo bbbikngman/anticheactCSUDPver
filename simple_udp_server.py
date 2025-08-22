@@ -167,7 +167,8 @@ class UDPVoiceServer:
                 for i, b in enumerate(seg_list, 1):
                     print(f"发送开场白段 {i}/{total}，大小: {len(b)}")
                     self._send_mp3_safe(addr, b)
-                    time.sleep(0.05)
+                    # 按要求控制节奏，确保前端先消费第一个分片
+                    time.sleep(0.2)
             else:
                 # 兜底：整段发送（可能会触发分片）
                 mp3_bytes = self.tts_udp.generate_mp3_from_stream(opening_stream)
@@ -182,38 +183,15 @@ class UDPVoiceServer:
         # 检查 UDP 包大小限制
         max_payload = 60000  # 留一些余量给协议头
         if len(mp3_bytes) > max_payload:
-            print(f"⚠️ MP3 过大 ({len(mp3_bytes)} 字节)，分片发送...")
-            self._send_large_mp3(addr, mp3_bytes)
-        else:
-            try:
-                down = ADPCMProtocol.pack_audio_packet(mp3_bytes, ADPCMProtocol.COMPRESSION_TTS_MP3)
-                self.sock.sendto(down, addr)
-                print(f"✅ MP3 发送成功给 {addr}")
-            except Exception as e:
-                print(f"MP3 发送失败: {e}")
+            # 理论上不会到这里：上层已确保每段 <= max_payload
+            print(f"⚠️ 收到超限 MP3 ({len(mp3_bytes)} 字节)，回退为单段发送")
+        try:
+            down = ADPCMProtocol.pack_audio_packet(mp3_bytes, ADPCMProtocol.COMPRESSION_TTS_MP3)
+            self.sock.sendto(down, addr)
+            print(f"✅ MP3 发送成功给 {addr}")
+        except Exception as e:
+            print(f"MP3 发送失败: {e}")
 
-    def _send_large_mp3(self, addr: Tuple[str,int], mp3_bytes: bytes):
-        """分片发送大的 MP3 文件（带序号）"""
-        import struct
-        chunk_size = 50000  # 50KB 每片
-        total_chunks = (len(mp3_bytes) + chunk_size - 1) // chunk_size
-
-        for i in range(total_chunks):
-            start = i * chunk_size
-            end = min(start + chunk_size, len(mp3_bytes))
-            chunk = mp3_bytes[start:end]
-
-            try:
-                # 在负载前添加 4 字节的分片头: [uint16 总片数][uint16 当前序号(从1开始)]
-                header = struct.pack('!HH', total_chunks, i + 1)
-                payload = header + chunk
-                down = ADPCMProtocol.pack_audio_packet(payload, ADPCMProtocol.COMPRESSION_TTS_MP3)
-                self.sock.sendto(down, addr)
-                print(f"发送片段 {i+1}/{total_chunks} 给 {addr}")
-                time.sleep(0.01)  # 小延迟避免丢包
-            except Exception as e:
-                print(f"片段 {i+1} 发送失败: {e}")
-                break
 
     def reset_client_session(self, addr: Tuple[str,int]):
         """重置指定客户端的会话状态"""
@@ -332,10 +310,17 @@ class UDPVoiceServer:
                                 print(f"开始 AI 对话生成...")
                                 kimi = self._get_client_ai(addr)
                                 resp_stream = kimi.get_response_stream(text)
-                                mp3_bytes = self.tts_udp.generate_mp3_from_stream(resp_stream)
-                                if mp3_bytes:
-                                    print(f"生成 MP3，大小: {len(mp3_bytes)} 字节，发送给 {addr}")
-                                    self._send_mp3_safe(addr, mp3_bytes)
+                                # 统一下行格式：切分为可独立播放的 MP3 片段
+                                seg_list = self.tts_udp.generate_mp3_segments_from_stream(resp_stream)
+                                if seg_list:
+                                    total = len(seg_list)
+                                    size_sum = sum(len(b) for b in seg_list)
+                                    print(f"TTS 共 {total} 段，总大小: {size_sum} 字节，将依次发送给 {addr}")
+                                    for i, b in enumerate(seg_list, 1):
+                                        print(f"发送回复段 {i}/{total}，大小: {len(b)}")
+                                        self._send_mp3_safe(addr, b)
+                                        # 间隔 0.2s，确保前端先消费前一段
+                                        time.sleep(0.2)
                                 else:
                                     print("TTS 生成失败，无 MP3 数据")
                     if not processed_any:

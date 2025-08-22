@@ -14,8 +14,7 @@ import tempfile
 import time
 import os
 import json
-import struct
-from queue import Queue, Empty
+from queue import Queue
 
 import numpy as np
 import sounddevice as sd
@@ -71,8 +70,8 @@ class UDPVoiceClient:
                 pkt, _ = self.sock.recvfrom(MAX_UDP)
                 t, payload = ADPCMProtocol.unpack_audio_packet(pkt)
                 if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
-                    print(f"收到 MP3 回复，大小: {len(payload)} 字节")
-                    # 非阻塞投递到播放线程，避免主接收线程被阻塞
+                    # 统一协议：每个UDP负载即为可独立播放的MP3片段
+                    print(f"收到 MP3 片段，大小: {len(payload)} 字节")
                     if not hasattr(self, '_play_q'):
                         self._play_q = Queue()
                         threading.Thread(target=self._player_loop, daemon=True).start()

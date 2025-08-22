@@ -29,7 +29,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOHivwGJsRRKkhnkoMVbTTd11/XunQlAi77+OVC4NztH
 ### 2. 部署私钥到服务器
 ```bash
 # 上传私钥到服务器
-scp -i hellokey.pem github_key root@47.238.82.128:~/.ssh/github_key
+scp -i hellokey.pem github_key root@47.239.226.21:~/.ssh/github_key
 
 # 连接到服务器
 ssh -i hellokey.pem root@47.238.82.128
