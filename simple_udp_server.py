@@ -37,8 +37,50 @@ class UDPVoiceServer:
     def __init__(self, host: str = "0.0.0.0", port: int = UDP_PORT):
         self.addr = (host, port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(self.addr)
+
+        # 设置端口重用选项，避免"Address already in use"错误
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        try:
+            self.sock.bind(self.addr)
+        except OSError as e:
+            if e.errno == 98:  # Address already in use
+                print(f"❌ 端口 {port} 被占用，尝试自动清理...")
+                self._kill_existing_process(port)
+                # 重试绑定
+                try:
+                    self.sock.bind(self.addr)
+                    print(f"✅ 端口清理成功，服务器绑定到 {self.addr}")
+                except OSError:
+                    print(f"❌ 无法绑定端口 {port}，请手动清理:")
+                    print(f"   sudo lsof -ti:{port} | xargs kill -9")
+                    raise
+            else:
+                raise
+
         self.running = True
+
+    def _kill_existing_process(self, port: int):
+        """尝试杀死占用指定端口的进程"""
+        import subprocess
+        try:
+            # 查找占用端口的进程
+            result = subprocess.run(['lsof', '-ti', f':{port}'],
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    if pid.strip():
+                        print(f"🎯 杀死进程 PID: {pid}")
+                        subprocess.run(['kill', '-9', pid], timeout=5)
+                time.sleep(1)  # 等待进程完全退出
+            else:
+                # 备用方法：杀死所有相关Python进程
+                subprocess.run(['pkill', '-9', '-f', 'simple_udp_server.py'], timeout=5)
+                time.sleep(1)
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+            print(f"⚠️ 自动清理失败: {e}")
+            print("请手动执行: sudo lsof -ti:31000 | xargs kill -9")
 
         # 多客户端：为每个客户端维护独立的编解码状态、缓冲队列与会话上下文
         self.client_codecs: Dict[Tuple[str,int], ADPCMCodec] = {}
@@ -92,16 +134,27 @@ class UDPVoiceServer:
         return self.client_ai[addr]
 
     def _send_opening_statement(self, addr: Tuple[str,int]):
-        """向新客户端发送开场白"""
+        """向新客户端发送开场白（方案B：切句小段发送）"""
         try:
             print(f"为新客户端 {addr} 生成开场白...")
             kimi = self._get_client_ai(addr)
             opening_stream = kimi.generate_opening_statement()
-            mp3_bytes = self.tts_udp.generate_mp3_from_stream(opening_stream)
-            if mp3_bytes:
-                print(f"开场白 MP3 大小: {len(mp3_bytes)} 字节")
-                # 直接分片发送以匹配客户端按片播放
-                self._send_large_mp3(addr, mp3_bytes)
+            # 切句合成，单句发送，避免UDP分片
+            seg_list = self.tts_udp.generate_mp3_segments_from_stream(opening_stream)
+            if seg_list:
+                total = len(seg_list)
+                size_sum = sum(len(b) for b in seg_list)
+                print(f"开场白共 {total} 段，总大小: {size_sum} 字节")
+                for i, b in enumerate(seg_list, 1):
+                    print(f"发送开场白段 {i}/{total}，大小: {len(b)}")
+                    self._send_mp3_safe(addr, b)
+                    time.sleep(0.05)
+            else:
+                # 兜底：整段发送（可能会触发分片）
+                mp3_bytes = self.tts_udp.generate_mp3_from_stream(opening_stream)
+                if mp3_bytes:
+                    print(f"开场白 MP3 大小: {len(mp3_bytes)} 字节")
+                    self._send_mp3_safe(addr, mp3_bytes)
         except Exception as e:
             print(f"开场白发送失败: {e}")
 

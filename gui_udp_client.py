@@ -69,8 +69,9 @@ class GUIClient:
         self.running = False
         self.stream = None
         self.log_queue = queue.Queue()
-        self.mp3_buffer = b""  # 用于拼接分片的 MP3
-        self.last_mp3_time = 0  # 最后收到 MP3 片段的时间
+        # 简单聚合器：短时间内到达的多个MP3片段合并后再播，避免乱序
+        self._agg_chunks = []
+        self._agg_last_time = 0.0
 
         # 日志到文件
         log_dir = os.path.dirname(config["logging"]["file"])
@@ -96,10 +97,35 @@ class GUIClient:
                 pkt, _ = self.sock.recvfrom(self.max_udp_size)
                 t, payload = ADPCMProtocol.unpack_audio_packet(pkt)
                 if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
-                    self.log(f"📥 收到 MP3片段: {len(payload)} 字节")
-
-                    # 简单直接：收到就播放
-                    self.log(f"🎵 立即播放MP3片段: {len(payload)} 字节")
+                    # 兼容两种格式：
+                    # A) 直接MP3字节（单包）
+                    # B) 自定义分片头: [uint16 总片数][uint16 当前序号] + MP3数据
+                    import struct
+                    now = time.time()
+                    if len(payload) >= 4:
+                        total, idx = struct.unpack('!HH', payload[:4])
+                        # 合法分片范围（1..200），否则当作无分片
+                        if 1 <= total <= 200 and 1 <= idx <= total:
+                            data = payload[4:]
+                            # 初始化/复用分片状态
+                            state = getattr(self, '_frag_state', None)
+                            if not state or (state.get('total', 0) != total) or (now - state.get('start', 0) > 3.0):
+                                state = {'total': total, 'parts': {}, 'start': now}
+                                self._frag_state = state
+                            # 写入分片（不清空旧分片，防止先到2/2后到1/2被清空）
+                            state['parts'][idx] = data
+                            self.log(f"📥 分片 {idx}/{total} 到达，已收 {len(state['parts'])}/{total}")
+                            # 如果收齐，按序合并播放
+                            if len(state['parts']) == total and total > 1:
+                                ordered = b"".join(state['parts'][i] for i in range(1, total+1))
+                                self.log(f"🎵 分片齐全，合并播放，总大小:{len(ordered)}")
+                                self._play_mp3_bytes(ordered)
+                                self._frag_state = None
+                            # 单片总数=1的情况
+                            if total == 1:
+                                self._play_mp3_bytes(data)
+                            continue
+                    # 无分片头或不合法：直接当作完整MP3播放
                     self._play_mp3_bytes(payload)
                 backoff = 0.1
             except socket.timeout:
