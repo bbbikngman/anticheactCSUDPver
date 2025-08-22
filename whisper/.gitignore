@@ -1,0 +1,257 @@
+# 🛡️ 反诈AI电话专员 - Git忽略文件
+
+# ===== Python相关 =====
+# 字节码文件
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 分发/打包
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# 单元测试/覆盖率报告
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env.local
+.env.*.local
+venv/
+venv_*/
+ENV/
+env/
+.venv
+
+# ===== 虚拟环境 =====
+# 项目特定的虚拟环境
+venv_antifraud/
+antifraud_env/
+.conda/
+
+# ===== AI模型和缓存 =====
+# Hugging Face缓存
+.cache/
+.huggingface/
+transformers_cache/
+
+# Whisper模型缓存
+*.pt
+*.pth
+*.bin
+*.safetensors
+models/
+model_cache/
+whisper_models/
+
+# PyTorch Hub缓存
+torch/
+.torch/
+
+# ONNX模型
+*.onnx
+
+# TensorFlow模型
+*.pb
+*.tflite
+saved_model/
+
+# 其他ML模型格式
+*.pkl
+*.joblib
+*.h5
+*.hdf5
+
+# ===== 音频文件 =====
+# 临时音频文件
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+temp_audio/
+audio_cache/
+recordings/
+
+# ===== 日志和临时文件 =====
+# 日志文件
+*.log
+logs/
+log/
+
+# 临时文件
+*.tmp
+*.temp
+temp/
+tmp/
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ===== IDE和编辑器 =====
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# ===== 配置和密钥 =====
+# 敏感配置文件（保留.env作为模板）
+.env.production
+.env.development
+.env.test
+config.local.py
+secrets.py
+api_keys.txt
+
+# SSL证书
+*.pem
+*.key
+*.crt
+*.csr
+
+# ===== 数据文件 =====
+# 数据库文件
+*.db
+*.sqlite
+*.sqlite3
+
+# CSV和数据文件
+*.csv
+*.xlsx
+*.json.bak
+data/
+datasets/
+
+# ===== 构建和部署 =====
+# Docker
+.dockerignore
+Dockerfile.local
+
+# 部署相关
+deploy/
+deployment/
+.deploy/
+
+# ===== 其他 =====
+# 备份文件
+*.bak
+*.backup
+*.old
+
+# 压缩文件
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# 测试输出
+test_output/
+test_results/
+
+# 性能分析
+*.prof
+
+# 内存转储
+*.dump
+
+# ===== 项目特定 =====
+# 语音合成输出
+tts_output/
+speech_cache/
+
+# 对话历史
+conversation_history/
+chat_logs/
+
+# 用户数据
+user_data/
+sessions/
+
+# 调试文件
+debug_output/
+debug_*.txt
+
+# 实验和测试
+experiments/
+playground/
+scratch/
+
+# 文档生成
+docs/_build/
+site/

@@ -1,0 +1,109 @@
+🛡️ 反诈AI电话专员 - 使用说明
+
+=== 快速开始 ===
+
+1. 双击运行 setup.bat 自动安装所有依赖
+2. 编辑 .env 文件，设置您的API密钥：
+   MOONSHOT_API_KEY="your_api_key_here"
+3. 选择运行方式：
+   - python main.py (原版本)
+   - python main_with_choice.py (可选择HTTP/WebSocket模式)
+
+=== 性能对比测试 ===
+
+运行 python performance_test.py 可以对比两种模式的性能：
+- HTTP流式模式：稳定，兼容性好
+- WebSocket流式模式：新版本，支持重试机制
+- 重点测试：发起请求到语音第一声播报的时间
+
+=== 新功能演示 ===
+
+运行 python feature_demo.py 可以体验新功能：
+- 多轮对话和上下文管理
+- 上下文缓存（节省API成本）
+- 重试机制演示
+- 对话连续性测试
+
+注意：部分模式在API环境下默认禁用（避免双重请求延迟）
+
+=== 重要参数调整 ===
+
+在 .env 文件中可以调整以下参数：
+
+【语音速度】
+TTS_RATE="+30%"          # 语速，+30%表示比正常快30%
+                         # 可以设置："+20%", "+40%", "+50%" 等
+
+【语音打断】
+SPEECH_INTERRUPT_DELAY=0.5   # 检测到用户说话后多少秒打断当前播放
+                             # 可以设置：0.3, 0.5, 0.8 等
+
+【语音质量】
+TTS_ENGINE="edge"        # 语音引擎，edge质量更好，pyttsx3是备用
+TTS_VOICE_ZH="zh-CN-YunxiNeural"  # 中文男声（权威）
+# 其他可选语音：
+# zh-CN-XiaoxiaoNeural  （女声，亲和）
+# zh-CN-YunyangNeural   （男声，年轻）
+
+【语音识别】
+WHISPER_MODEL_SIZE="small"   # 识别精度，可选：tiny, base, small, medium
+                             # tiny最快但精度低，medium精度高但慢，我用的3060ti最佳是small，更好的显卡可以尝试medium或更大的模型
+
+【设备选择】
+DEVICE="cuda"            # 使用GPU加速，如果没有GPU改为"cpu"
+
+【新功能配置】
+# 上下文管理（控制AI记忆长度）
+MAX_CONTEXT_MESSAGES=50        # 最大保留对话条数，反诈场景建议50条以上
+# 重试机制（网络不稳定时自动重试）
+MAX_RETRY_ATTEMPTS=100         # 最大重试次数
+RETRY_DELAY=1                  # 重试间隔（秒）
+# 部分模式（客服模式、角色扮演）
+USE_PARTIAL_MODE=true          # 是否启用部分模式
+CUSTOMER_SERVICE_PREFIX="亲爱的客户，您好，"  # 客服模式前缀
+
+=== 常见问题 ===
+
+问题1：程序启动后没有声音
+解决：检查 TTS_ENGINE 设置，尝试改为 "pyttsx3"，并尝试解决edge模型的安装问题
+
+问题2：语音识别不准确
+解决：调整 VAD_SENSITIVITY=0.3 （降低敏感度）
+     或者使用更大的模型 WHISPER_MODEL_SIZE="medium"
+
+问题3：CUDA不可用
+解决：运行 install_cuda_pytorch.bat 重新安装CUDA版本
+
+问题4：语音太慢
+解决：调整 TTS_RATE="+50%" 或更高
+
+问题5：打断太快/太慢
+解决：调整 SPEECH_INTERRUPT_DELAY=0.3 （更快）或 0.8 （更慢）
+
+=== 修改AI说话风格和内容 ===
+
+如果想修改AI的说话风格、角色设定或对话内容：
+1. 编辑 prompts.py 文件
+2. 修改 PERSONA_PROMPT_V2 中的角色设定
+3. 可以改变AI的名字、说话风格、知识库等
+4. 修改后重启程序即可生效
+
+例如：
+- 让AI更严肃：修改"行为准则与说话风格"部分
+- 让AI更亲和：改用女声，调整语气词使用
+- 更新知识库：在"知识库"部分添加新的诈骗类型
+
+=== 文件说明 ===
+
+main.py - 主程序，运行这个文件启动系统
+.env - 配置文件，所有参数都在这里调整
+prompts.py - AI提示词配置，修改AI行为和说话风格
+setup.bat - 自动安装脚本
+requirements.txt - 依赖包列表
+ARCHITECTURE.md - 详细的系统架构文档
+
+=== 联系支持 ===
+
+如果遇到问题，请查看 README.md 文档或联系技术支持。
+
+祝使用愉快！
