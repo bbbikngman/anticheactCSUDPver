@@ -96,13 +96,7 @@ class GUIClient:
                 self.sock.settimeout(2.0)
                 pkt, _ = self.sock.recvfrom(self.max_udp_size)
                 t, payload = ADPCMProtocol.unpack_audio_packet(pkt)
-                if t == ADPCMProtocol.CONTROL_STOP_PLAY:
-                    self._interrupt_flag = True
-                    self.log("📨 收到打断指令")
-                    if hasattr(self, '_frag_state') and self._frag_state:
-                        self._frag_state = None
-                        self.log("🗑️ 已清空待播放分片")
-                elif t == ADPCMProtocol.COMPRESSION_TTS_MP3:
+                if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
                     # 兼容两种格式：
                     # A) 直接MP3字节（单包）
                     # B) 自定义分片头: [uint16 总片数][uint16 当前序号] + MP3数据
@@ -143,12 +137,6 @@ class GUIClient:
                 backoff = min(backoff * 2, 2.0)
 
     def _play_mp3_bytes(self, audio_bytes: bytes):
-        # 播放前检查打断标志
-        if getattr(self, '_interrupt_flag', False):
-            self._interrupt_flag = False
-            self.log("🛑 播放前被打断，跳过")
-            return
-
         self.log(f"🔊 开始播放MP3，大小: {len(audio_bytes)} 字节")
         try:
             # 创建临时文件
@@ -176,16 +164,9 @@ class GUIClient:
                 pygame.mixer.music.play()
                 self.log("▶️ 开始播放音频...")
 
-                # 等待播放完成，同时检查打断
+                # 等待播放完成
                 play_start = time.time()
                 while pygame.mixer.music.get_busy():
-                    # 检查打断标志
-                    if getattr(self, '_interrupt_flag', False):
-                        pygame.mixer.music.stop()
-                        pygame.mixer.music.unload()
-                        self._interrupt_flag = False
-                        self.log("🛑 播放中被打断")
-                        return
                     time.sleep(0.1)
                     # 防止无限等待
                     if time.time() - play_start > 30:

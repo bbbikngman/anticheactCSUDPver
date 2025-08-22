@@ -151,7 +151,6 @@ class ADPCMProtocol:
     COMPRESSION_TTS_MP3 = 2
     CONTROL_RESET = 100
     CONTROL_HELLO = 101
-    CONTROL_STOP_PLAY = 102
     
     @staticmethod
     def pack_audio_packet(audio_data: bytes, compression_type: int = COMPRESSION_ADPCM) -> bytes:
