@@ -13,20 +13,40 @@ import threading
 import tempfile
 import time
 import os
+import json
+import struct
+from queue import Queue, Empty
 
 import numpy as np
 import sounddevice as sd
 
 from adpcm_codec import ADPCMCodec, ADPCMProtocol
 
-SERVER_IP = "127.0.0.1"
-SERVER_PORT = 31000
+# 读取配置（如果存在）
+def load_config(path="client_config.json"):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {"server": {"ip": "127.0.0.1", "port": 31000}}
+
+_cfg = load_config()
+SERVER_IP = _cfg["server"].get("ip", "127.0.0.1")
+SERVER_PORT = int(_cfg["server"].get("port", 31000))
 MAX_UDP = 65507
 
 class UDPVoiceClient:
     def __init__(self, server_ip: str = SERVER_IP, server_port: int = SERVER_PORT):
         self.server = (server_ip, server_port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        # Windows UDP 10054 兼容：关闭 ICMP Port Unreachable 触发的异常
+        try:
+            SIO_UDP_CONNRESET = 0x9800000C
+            self.sock.ioctl(SIO_UDP_CONNRESET, False)
+        except Exception:
+            pass
+
         self.codec = ADPCMCodec()
         self.running = True
 
@@ -52,8 +72,14 @@ class UDPVoiceClient:
                 t, payload = ADPCMProtocol.unpack_audio_packet(pkt)
                 if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
                     print(f"收到 MP3 回复，大小: {len(payload)} 字节")
-                    # 写临时 mp3 并播放（与服务器端逻辑一致）
-                    self._play_mp3_bytes(payload)
+                    # 非阻塞投递到播放线程，避免主接收线程被阻塞
+                    if not hasattr(self, '_play_q'):
+                        self._play_q = Queue()
+                        threading.Thread(target=self._player_loop, daemon=True).start()
+                    try:
+                        self._play_q.put_nowait(payload)
+                    except Exception:
+                        pass
                 backoff = 0.1  # 成功则重置退避
             except socket.timeout:
                 # 静音状态下的超时是正常的，不打印错误
@@ -63,6 +89,15 @@ class UDPVoiceClient:
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 2.0)
 
+    def _player_loop(self):
+        """独立播放线程，串行播放队列中的MP3，避免阻塞接收线程"""
+        while True:
+            try:
+                payload = self._play_q.get()
+                self._play_mp3_bytes(payload)
+            except Exception:
+                time.sleep(0.01)
+
     def _play_mp3_bytes(self, audio_bytes: bytes):
         try:
             with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
@@ -70,11 +105,14 @@ class UDPVoiceClient:
                 path = tmp.name
             try:
                 import pygame
+                if pygame.mixer.get_init():
+                    pygame.mixer.quit()
                 pygame.mixer.init()
                 pygame.mixer.music.load(path)
                 pygame.mixer.music.play()
                 while pygame.mixer.music.get_busy():
                     time.sleep(0.05)
+                pygame.mixer.music.unload()
             finally:
                 try:
                     os.unlink(path)

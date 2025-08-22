@@ -329,6 +329,12 @@ class UDPVoiceServer:
                             )
                             print(f"转写结果: {text}")
                             if text:
+                                # 发送打断信号
+                                try:
+                                    stop_pkt = ADPCMProtocol.pack_control(ADPCMProtocol.CONTROL_STOP_PLAY)
+                                    self.sock.sendto(stop_pkt, addr)
+                                except Exception:
+                                    pass
                                 print(f"开始 AI 对话生成...")
                                 kimi = self._get_client_ai(addr)
                                 resp_stream = kimi.get_response_stream(text)
