@@ -43,6 +43,7 @@ class AudioPlayQueue:
         self.playing = False
         self.play_thread = None
         self.stop_event = threading.Event()
+        self.interrupt_event = threading.Event()  # 打断当前播放事件
         self.log_callback = None  # 日志回调函数
 
     def set_log_callback(self, callback):
@@ -81,10 +82,25 @@ class AudioPlayQueue:
                 chunk.chunk_id <= self.max_playable_chunk_id)
 
     def set_interrupt_watermark(self, session_id: str, max_playable_chunk_id: int):
-        """设置打断水位线"""
+        """设置打断水位线并立即停止当前播放"""
         self.log(f"🛑 设置打断水位线: session={session_id}, max_chunk={max_playable_chunk_id}")
         if session_id == self.current_session:
             self.max_playable_chunk_id = max_playable_chunk_id
+            # 立即停止当前播放
+            self.stop_current_playback()
+
+    def stop_current_playback(self):
+        """立即停止当前播放的音频"""
+        self.log("🛑 立即停止当前播放")
+        self.interrupt_event.set()  # 设置打断事件
+
+    def is_interrupted(self) -> bool:
+        """检查是否收到打断信号"""
+        return self.interrupt_event.is_set()
+
+    def clear_interrupt(self):
+        """清除打断信号"""
+        self.interrupt_event.clear()
 
     def start_new_session(self, session_id: str):
         """开始新的播放session"""
@@ -156,10 +172,15 @@ class AudioPlayQueue:
                 pygame.mixer.music.play()
                 self.log("▶️ 开始播放音频...")
 
-                # 等待播放完成
+                # 等待播放完成，同时检查打断事件
                 while pygame.mixer.music.get_busy():
                     if self.stop_event.is_set():
                         pygame.mixer.music.stop()
+                        break
+                    if self.is_interrupted():
+                        self.log("🛑 检测到打断事件，立即停止播放")
+                        pygame.mixer.music.stop()
+                        self.clear_interrupt()  # 清除打断事件
                         break
                     time.sleep(0.1)
 
@@ -239,7 +260,7 @@ class GUIClient:
         # WebSocket信令客户端（新增）
         self.interrupt_client = InterruptSignalClient(
             server_host=self.server[0],  # 使用UDP服务器的IP
-            server_port=31003            # WebSocket端口
+            server_port=31004            # WebSocket端口
         )
         self.interrupt_client.set_log_callback(self.log)
         self.interrupt_client.set_interrupt_callback(self._handle_interrupt_signal)
@@ -468,9 +489,14 @@ class GUIClient:
                 pygame.mixer.music.play()
                 self.log("▶️ 开始播放音频...")
 
-                # 等待播放完成
+                # 等待播放完成，同时检查打断事件
                 play_start = time.time()
                 while pygame.mixer.music.get_busy():
+                    if self.audio_queue.is_interrupted():
+                        self.log("🛑 检测到打断事件，立即停止播放")
+                        pygame.mixer.music.stop()
+                        self.audio_queue.clear_interrupt()  # 清除打断事件
+                        break
                     time.sleep(0.1)
                     # 防止无限等待
                     if time.time() - play_start > 30:

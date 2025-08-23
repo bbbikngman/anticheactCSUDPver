@@ -115,7 +115,7 @@ class UDPVoiceServer:
         self.websocket_address_map = {}  # {server_addr: actual_client_addr}
 
         # WebSocket信令服务器 (新增)
-        self.interrupt_server = InterruptSignalServer(host="0.0.0.0", port=31003)
+        self.interrupt_server = InterruptSignalServer(host="0.0.0.0", port=31004)
         self.interrupt_server.set_log_callback(self._log_websocket)
 
     def _kill_existing_process(self, port: int):
