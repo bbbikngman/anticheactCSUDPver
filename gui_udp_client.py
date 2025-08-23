@@ -74,6 +74,9 @@ class GUIClient:
         self._agg_chunks = []
         self._agg_last_time = 0.0
 
+        # 分包重组状态管理
+        self.fragment_buffers = {}  # {(session_id, chunk_id): {fragments: {}, total: int, start_time: float}}
+
         # 日志到文件
         log_dir = os.path.dirname(config["logging"]["file"])
         if log_dir:
@@ -97,14 +100,19 @@ class GUIClient:
                 self.sock.settimeout(2.0)
                 pkt, _ = self.sock.recvfrom(self.max_udp_size)
 
-                # 尝试解析新格式（带session和chunk ID）
+                # 尝试解析新格式（带session和chunk ID，支持分包）
                 try:
-                    t, session_id, chunk_id, payload = ADPCMProtocol.unpack_audio_with_session(pkt)
+                    t, session_id, chunk_id, fragment_index, total_fragments, payload = ADPCMProtocol.unpack_audio_with_session(pkt)
                     if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
-                        self.log(f"📦 收到音频: session={session_id}, chunk={chunk_id}, 大小={len(payload)}字节")
-                        # TODO: 这里将来会加入播放队列和打断逻辑
-                        # 现在先直接播放
-                        self._play_mp3_bytes(payload)
+                        if total_fragments == 1:
+                            # 单包，直接播放
+                            self.log(f"📦 收到音频: session={session_id}, chunk={chunk_id}, 大小={len(payload)}字节")
+                            self._play_mp3_bytes(payload)
+                        else:
+                            # 分包，需要重组
+                            self.log(f"📦 收到分包: session={session_id}, chunk={chunk_id}, 分包={fragment_index+1}/{total_fragments}, 大小={len(payload)}字节")
+                            self.log(f"🔍 分包详情: fragment_index={fragment_index}, total_fragments={total_fragments}")
+                            self._handle_fragmented_audio(session_id, chunk_id, fragment_index, total_fragments, payload)
                         backoff = 0.1
                         continue
                 except (ValueError, struct.error):
@@ -150,6 +158,65 @@ class GUIClient:
                 self.log(f"client recv error: {e}")
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 2.0)
+
+    def _handle_fragmented_audio(self, session_id: str, chunk_id: int,
+                               fragment_index: int, total_fragments: int, fragment_data: bytes):
+        """处理分包音频数据的重组"""
+        key = (session_id, chunk_id)
+        now = time.time()
+
+        # 清理超时的分包缓存（超过5秒）
+        expired_keys = []
+        for k, buffer_info in self.fragment_buffers.items():
+            if now - buffer_info['start_time'] > 5.0:
+                expired_keys.append(k)
+        for k in expired_keys:
+            del self.fragment_buffers[k]
+            self.log(f"⚠️ 清理超时分包缓存: session={k[0]}, chunk={k[1]}")
+
+        # 初始化或获取分包缓存
+        if key not in self.fragment_buffers:
+            self.fragment_buffers[key] = {
+                'fragments': {},
+                'total': total_fragments,
+                'start_time': now
+            }
+
+        buffer_info = self.fragment_buffers[key]
+
+        # 检查分包总数是否一致
+        if buffer_info['total'] != total_fragments:
+            self.log(f"⚠️ 分包总数不一致，重置缓存: session={session_id}, chunk={chunk_id}")
+            buffer_info = {
+                'fragments': {},
+                'total': total_fragments,
+                'start_time': now
+            }
+            self.fragment_buffers[key] = buffer_info
+
+        # 存储分包数据
+        buffer_info['fragments'][fragment_index] = fragment_data
+        received_count = len(buffer_info['fragments'])
+
+        self.log(f"📥 分包缓存: session={session_id}, chunk={chunk_id}, 已收={received_count}/{total_fragments}")
+
+        # 检查是否收齐所有分包
+        if received_count == total_fragments:
+            # 按顺序重组数据
+            complete_data = b""
+            for i in range(total_fragments):
+                if i in buffer_info['fragments']:
+                    complete_data += buffer_info['fragments'][i]
+                else:
+                    self.log(f"❌ 分包{i}缺失，无法重组: session={session_id}, chunk={chunk_id}")
+                    return
+
+            # 清理缓存
+            del self.fragment_buffers[key]
+
+            # 播放重组后的音频
+            self.log(f"🎵 分包重组完成，播放音频: session={session_id}, chunk={chunk_id}, 总大小={len(complete_data)}字节")
+            self._play_mp3_bytes(complete_data)
 
     def _play_mp3_bytes(self, audio_bytes: bytes):
         self.log(f"🔊 开始播放MP3，大小: {len(audio_bytes)} 字节")

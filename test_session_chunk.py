@@ -29,18 +29,22 @@ def test_session_chunk_protocol():
         print(f"✅ 打包成功，包大小: {len(packet)} 字节")
         
         # 解包
-        compression_type, session_id, chunk_id, audio_data = ADPCMProtocol.unpack_audio_with_session(packet)
+        compression_type, session_id, chunk_id, fragment_index, total_fragments, audio_data = ADPCMProtocol.unpack_audio_with_session(packet)
         
         print(f"解包结果:")
         print(f"  压缩类型: {compression_type}")
         print(f"  Session ID: '{session_id}'")
         print(f"  Chunk ID: {chunk_id}")
+        print(f"  分包索引: {fragment_index}")
+        print(f"  总分包数: {total_fragments}")
         print(f"  音频数据: {len(audio_data)} 字节")
         
         # 验证
         assert compression_type == ADPCMProtocol.COMPRESSION_TTS_MP3
         assert session_id == test_session_id
         assert chunk_id == test_chunk_id
+        assert fragment_index == 0
+        assert total_fragments == 1
         assert audio_data == test_mp3_data
         
         print("✅ 协议测试通过！")
@@ -67,7 +71,7 @@ def test_session_id_edge_cases():
             packet = ADPCMProtocol.pack_audio_with_session(
                 b"test", session_id, 1
             )
-            _, decoded_session, _, _ = ADPCMProtocol.unpack_audio_with_session(packet)
+            _, decoded_session, _, _, _, _ = ADPCMProtocol.unpack_audio_with_session(packet)
             print(f"  {description}: '{session_id}' -> '{decoded_session}'")
         except Exception as e:
             print(f"  {description}: 失败 - {e}")

@@ -260,22 +260,52 @@ class UDPVoiceServer:
     # === 新增：支持Session和Chunk的音频发送方法 ===
     def _send_mp3_with_session(self, addr: Tuple[str,int], mp3_bytes: bytes,
                               session_id: str, chunk_id: int):
-        """发送带session和chunk ID的MP3数据"""
+        """发送带session和chunk ID的MP3数据（支持自动分包）"""
         try:
-            # 使用新的协议打包
-            packet = ADPCMProtocol.pack_audio_with_session(
-                mp3_bytes, session_id, chunk_id, ADPCMProtocol.COMPRESSION_TTS_MP3
-            )
+            # UDP安全包大小限制（临时设为30KB，用于测试分包功能）
+            MAX_UDP_PAYLOAD = 30000
+            # 协议头部大小：1+4+8+4+2+2 = 21字节
+            HEADER_SIZE = 21
+            MAX_AUDIO_PER_PACKET = MAX_UDP_PAYLOAD - HEADER_SIZE  # 59979字节
 
-            # 检查UDP包大小限制
-            if len(packet) > 65000:  # UDP最大包大小限制
-                print(f"⚠️ 包过大 ({len(packet)} 字节)，session={session_id}, chunk={chunk_id}")
-                # TODO: 实现大包分片逻辑（暂时跳过）
-                return False
+            # 检查是否需要分包
+            if len(mp3_bytes) <= MAX_AUDIO_PER_PACKET:
+                # 单包发送
+                packet = ADPCMProtocol.pack_audio_with_session(
+                    mp3_bytes, session_id, chunk_id, ADPCMProtocol.COMPRESSION_TTS_MP3,
+                    fragment_index=0, total_fragments=1
+                )
+                self.sock.sendto(packet, addr)
+                print(f"✅ 发送MP3 session={session_id}, chunk={chunk_id}, 大小={len(mp3_bytes)}字节 -> {addr}")
+                return True
+            else:
+                # 分包发送
+                total_fragments = (len(mp3_bytes) + MAX_AUDIO_PER_PACKET - 1) // MAX_AUDIO_PER_PACKET
+                print(f"📦 MP3过大({len(mp3_bytes)}字节)，分为{total_fragments}包发送，session={session_id}, chunk={chunk_id}")
+                print(f"🔍 分包计算: 音频大小={len(mp3_bytes)}, 每包最大={MAX_AUDIO_PER_PACKET}, 总分包数={total_fragments}")
 
-            self.sock.sendto(packet, addr)
-            print(f"✅ 发送MP3 session={session_id}, chunk={chunk_id}, 大小={len(mp3_bytes)}字节 -> {addr}")
-            return True
+                for fragment_index in range(total_fragments):
+                    start_pos = fragment_index * MAX_AUDIO_PER_PACKET
+                    end_pos = min(start_pos + MAX_AUDIO_PER_PACKET, len(mp3_bytes))
+                    fragment_data = mp3_bytes[start_pos:end_pos]
+
+                    print(f"🔍 准备分包 {fragment_index}: start={start_pos}, end={end_pos}, 数据大小={len(fragment_data)}")
+
+                    packet = ADPCMProtocol.pack_audio_with_session(
+                        fragment_data, session_id, chunk_id, ADPCMProtocol.COMPRESSION_TTS_MP3,
+                        fragment_index=fragment_index, total_fragments=total_fragments
+                    )
+
+                    print(f"🔍 分包协议: fragment_index={fragment_index}, total_fragments={total_fragments}")
+
+                    self.sock.sendto(packet, addr)
+                    print(f"✅ 发送分包 session={session_id}, chunk={chunk_id}, 分包={fragment_index+1}/{total_fragments}, 大小={len(fragment_data)}字节")
+
+                    # 分包间小延迟，避免网络拥塞
+                    time.sleep(0.01)
+
+                print(f"📦 分包发送完成 session={session_id}, chunk={chunk_id}")
+                return True
 
         except Exception as e:
             print(f"❌ 发送MP3失败 session={session_id}, chunk={chunk_id}: {e}")
