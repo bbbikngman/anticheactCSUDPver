@@ -85,6 +85,32 @@ class UDPVoiceServer:
         self.client_chunk_counters: Dict[Tuple[str,int], int] = {} # {addr: chunk_counter}
         self.client_interrupt_cooldown: Dict[Tuple[str,int], float] = {} # {addr: next_allowed_time}
 
+        # 线程安全锁 (新增)
+        self.interrupt_lock = threading.Lock()  # 打断状态锁
+        self.session_lock = threading.Lock()    # Session状态锁
+
+        # 统一状态管理 (新增)
+        self.client_states = {}  # {addr: {active_session, current_chunk, interrupt_cooldown, last_interrupt_time}}
+
+        # 智能打断配置 (新增)
+        self.INTERRUPT_COOLDOWN = 2.0  # 成功打断后的冷却
+        self.ATTEMPT_COOLDOWN = 0.3    # 尝试打断后的短冷却
+        self.MIN_INTERRUPT_LENGTH = 2  # 最小有效长度
+
+        # 语气词黑名单 (新增)
+        self.FILLER_WORDS = {
+            # 中文语气词
+            '嗯', '啊', '呃', '额', '哦', '唔', '嗯嗯', '啊啊', '呃呃',
+            '那个', '这个', '就是', '然后', '嗯哼', '哼', '咳',
+            # 英文语气词
+            'um', 'uh', 'er', 'ah', 'oh', 'hmm', 'well', 'like', 'you know',
+            # 常见噪音词
+            '咳咳', '清嗓', '嘘', '咦', '诶', '哎', '唉'
+        }
+
+        # 打断功能控制 (新增)
+        self.interrupt_enabled = True  # 全局打断开关
+
         # WebSocket信令服务器 (新增)
         self.interrupt_server = InterruptSignalServer(host="0.0.0.0", port=31001)
         self.interrupt_server.set_log_callback(self._log_websocket)
@@ -152,6 +178,172 @@ class UDPVoiceServer:
     def _log_websocket(self, message: str):
         """WebSocket信令服务器日志回调"""
         print(f"[WebSocket] {message}")
+
+    def _get_client_state(self, addr: Tuple[str,int]) -> dict:
+        """获取客户端状态（线程安全）"""
+        with self.session_lock:
+            if addr not in self.client_states:
+                self.client_states[addr] = {
+                    'active_session': '',
+                    'current_chunk': 0,
+                    'interrupt_cooldown': 0.0,
+                    'last_interrupt_time': 0.0
+                }
+            return self.client_states[addr].copy()  # 返回副本避免外部修改
+
+    def _update_client_chunk(self, addr: Tuple[str,int], session_id: str, chunk_id: int):
+        """更新客户端chunk状态（线程安全）"""
+        with self.interrupt_lock:  # 使用打断锁保护
+            with self.session_lock:
+                if addr not in self.client_states:
+                    self.client_states[addr] = {
+                        'active_session': '',
+                        'current_chunk': 0,
+                        'interrupt_cooldown': 0.0,
+                        'last_interrupt_time': 0.0
+                    }
+
+                self.client_states[addr]['active_session'] = session_id
+                self.client_states[addr]['current_chunk'] = chunk_id
+
+                print(f"🔄 状态更新: addr={addr}, session={session_id}, chunk={chunk_id}")
+
+    def _is_valid_interrupt_text(self, transcription: str) -> bool:
+        """检查转写文本是否值得触发打断"""
+        if not transcription:
+            return False
+
+        # 清理文本
+        text = transcription.strip().lower()
+
+        # 长度检查
+        if len(text) < self.MIN_INTERRUPT_LENGTH:
+            print(f"🚫 文本太短，不触发打断: '{text}'")
+            return False
+
+        # 语气词检查
+        if text in self.FILLER_WORDS:
+            print(f"🚫 语气词过滤，不触发打断: '{text}'")
+            return False
+
+        # 组合语气词检查（多个语气词组合）
+        words = text.split()
+        if len(words) <= 3 and all(word in self.FILLER_WORDS for word in words):
+            print(f"🚫 组合语气词过滤，不触发打断: '{text}'")
+            return False
+
+        # 重复字符检查（如"啊啊啊啊"）
+        if len(set(text.replace(' ', ''))) <= 2 and len(text) >= 3:
+            print(f"🚫 重复字符过滤，不触发打断: '{text}'")
+            return False
+
+        print(f"✅ 有效打断文本: '{text}'")
+        return True
+
+    def _set_interrupt_cooldown(self, addr: Tuple[str,int], successful_interrupt: bool):
+        """设置智能冷却时间"""
+        now = time.time()
+
+        if successful_interrupt:
+            # 成功打断：长冷却
+            cooldown_time = now + self.INTERRUPT_COOLDOWN
+            cooldown_type = "成功打断"
+        else:
+            # 尝试打断但被过滤：短冷却
+            cooldown_time = now + self.ATTEMPT_COOLDOWN
+            cooldown_type = "尝试打断"
+
+        with self.session_lock:
+            if addr not in self.client_states:
+                self.client_states[addr] = {
+                    'active_session': '',
+                    'current_chunk': 0,
+                    'interrupt_cooldown': 0.0,
+                    'last_interrupt_time': 0.0
+                }
+            self.client_states[addr]['interrupt_cooldown'] = cooldown_time
+
+        print(f"⏰ 设置{cooldown_type}冷却: {cooldown_time - now:.1f}秒")
+
+    def _atomic_interrupt_check_and_trigger(self, addr: Tuple[str,int], transcription: str) -> bool:
+        """原子化的打断检查和触发"""
+        # 全局打断开关检查
+        if not self.interrupt_enabled:
+            print("🚫 打断功能已禁用（WebSocket不可用），继续正常对话")
+            return False
+
+        with self.interrupt_lock:  # 整个操作在锁内完成
+            # 1. 原子化读取当前状态
+            client_state = self._get_client_state(addr)
+            current_session = client_state['active_session']
+            current_chunk = client_state['current_chunk']
+            cooldown_until = client_state['interrupt_cooldown']
+
+            # 2. 检查打断条件
+            now = time.time()
+
+            # 检查冷却时间
+            if now < cooldown_until:
+                remaining = cooldown_until - now
+                print(f"⏰ 打断冷却中，剩余 {remaining:.1f}秒")
+                return False
+
+            # 检查转写结果（加入语气词过滤）
+            if not self._is_valid_interrupt_text(transcription):
+                # 设置短冷却，避免频繁的无效尝试
+                self._set_interrupt_cooldown(addr, successful_interrupt=False)
+                return False
+
+            # 检查是否有活跃session
+            if not current_session:
+                print(f"🚫 无活跃session，不触发打断")
+                return False
+
+            # 检查WebSocket连接
+            if not self.interrupt_server.bind_udp_address(addr):
+                print(f"⚠️ WebSocket未连接，跳过打断")
+                return False
+
+            # 3. 原子化执行打断
+            print(f"🛑 原子化打断: session={current_session}, chunk={current_chunk}, text='{transcription}'")
+
+            try:
+                # 发送打断信号（使用当前读取的状态）
+                success = self.interrupt_server.send_interrupt_signal(addr, current_session, current_chunk)
+                if not success:
+                    print(f"⚠️ 打断信号发送失败，客户端 {addr} 将继续播放")
+                    return False
+
+                # 生成新session
+                new_session_id = self._generate_session_id()
+
+                # 原子化更新状态
+                with self.session_lock:
+                    self.client_states[addr].update({
+                        'active_session': new_session_id,
+                        'current_chunk': 0,
+                        'interrupt_cooldown': now + self.INTERRUPT_COOLDOWN,
+                        'last_interrupt_time': now
+                    })
+
+                    # 更新session映射
+                    self.client_sessions[addr] = new_session_id
+                    self.client_chunk_counters[addr] = 0
+
+                # 发送新session信号
+                success = self.interrupt_server.send_start_session_signal(addr, new_session_id)
+                if not success:
+                    print(f"⚠️ 新session信号发送失败，但打断已生效")
+                    # 打断已发送，即使新session信号失败也继续
+
+                print(f"✅ 打断完成: old_session={current_session} -> new_session={new_session_id}")
+                print(f"🛑 打断水位线: chunk={current_chunk}, 冷却到={now + self.INTERRUPT_COOLDOWN}")
+
+                return True
+
+            except Exception as e:
+                print(f"❌ 打断执行失败: {e}")
+                return False
 
     def _get_client_codec(self, addr: Tuple[str,int]) -> ADPCMCodec:
         if addr not in self.client_codecs:
@@ -295,6 +487,10 @@ class UDPVoiceServer:
                 )
                 self.sock.sendto(packet, addr)
                 print(f"✅ 发送MP3 session={session_id}, chunk={chunk_id}, 大小={len(mp3_bytes)}字节 -> {addr}")
+
+                # 更新客户端状态（线程安全）
+                self._update_client_chunk(addr, session_id, chunk_id)
+
                 return True
             else:
                 # 分包发送
@@ -323,6 +519,10 @@ class UDPVoiceServer:
                     time.sleep(0.01)
 
                 print(f"📦 分包发送完成 session={session_id}, chunk={chunk_id}")
+
+                # 更新客户端状态（线程安全）
+                self._update_client_chunk(addr, session_id, chunk_id)
+
                 return True
 
         except Exception as e:
@@ -465,6 +665,12 @@ class UDPVoiceServer:
                             )
                             print(f"转写结果: {text}")
                             if text:
+                                # 检查是否需要触发打断
+                                interrupt_triggered = self._atomic_interrupt_check_and_trigger(addr, text)
+
+                                if interrupt_triggered:
+                                    print(f"🛑 已触发打断，使用新session继续对话")
+
                                 print(f"开始 AI 对话生成...")
                                 kimi = self._get_client_ai(addr)
                                 resp_stream = kimi.get_response_stream(text)
