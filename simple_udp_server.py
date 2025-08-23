@@ -79,6 +79,11 @@ class UDPVoiceServer:
         self.client_last_activity = {}
         self.client_welcomed = set()
 
+        # Session和Chunk管理 (新增)
+        self.client_sessions: Dict[Tuple[str,int], str] = {}      # {addr: current_session_id}
+        self.client_chunk_counters: Dict[Tuple[str,int], int] = {} # {addr: chunk_counter}
+        self.client_interrupt_cooldown: Dict[Tuple[str,int], float] = {} # {addr: next_allowed_time}
+
     def _kill_existing_process(self, port: int):
         """尝试杀死占用指定端口的进程"""
         import subprocess
@@ -152,28 +157,65 @@ class UDPVoiceServer:
             self.client_ai[addr] = KimiAI()
         return self.client_ai[addr]
 
+    # === Session和Chunk管理方法 (新增) ===
+    def generate_new_session_id(self, addr: Tuple[str,int]) -> str:
+        """为客户端生成新的session ID"""
+        import uuid
+        session_id = str(uuid.uuid4())[:8]  # 8位短ID
+        self.client_sessions[addr] = session_id
+        self.client_chunk_counters[addr] = 0  # 重置chunk计数器
+        print(f"🆔 为客户端 {addr} 生成新session: {session_id}")
+        return session_id
+
+    def get_current_session_id(self, addr: Tuple[str,int]) -> str:
+        """获取客户端当前的session ID"""
+        return self.client_sessions.get(addr, "")
+
+    def get_next_chunk_id(self, addr: Tuple[str,int]) -> int:
+        """获取客户端下一个chunk ID"""
+        if addr not in self.client_chunk_counters:
+            self.client_chunk_counters[addr] = 0
+        self.client_chunk_counters[addr] += 1
+        return self.client_chunk_counters[addr]
+
+    def get_current_chunk_id(self, addr: Tuple[str,int]) -> int:
+        """获取客户端当前的chunk ID"""
+        return self.client_chunk_counters.get(addr, 0)
+
+    # === 打断冷却管理 (新增) ===
+    def can_interrupt(self, addr: Tuple[str,int]) -> bool:
+        """检查是否可以触发打断（2s冷却）"""
+        now = time.time()
+        return now >= self.client_interrupt_cooldown.get(addr, 0)
+
+    def set_interrupt_cooldown(self, addr: Tuple[str,int]):
+        """设置打断冷却时间（2秒）"""
+        self.client_interrupt_cooldown[addr] = time.time() + 2.0
+        print(f"⏰ 设置打断冷却，客户端 {addr}，2秒内不可再次打断")
+
     def _send_opening_statement(self, addr: Tuple[str,int]):
-        """向新客户端发送开场白（方案B：切句小段发送）"""
+        """向新客户端发送开场白（使用新的session管理）"""
         try:
             print(f"为新客户端 {addr} 生成开场白...")
+
+            # 为开场白生成新的session
+            session_id = self.generate_new_session_id(addr)
+
             kimi = self._get_client_ai(addr)
             opening_stream = kimi.generate_opening_statement()
-            # 切句合成，单句发送，避免UDP分片
+
+            # 切句合成，使用新的session发送方法
             seg_list = self.tts_udp.generate_mp3_segments_from_stream(opening_stream)
             if seg_list:
-                total = len(seg_list)
-                size_sum = sum(len(b) for b in seg_list)
-                print(f"开场白共 {total} 段，总大小: {size_sum} 字节")
-                for i, b in enumerate(seg_list, 1):
-                    print(f"发送开场白段 {i}/{total}，大小: {len(b)}")
-                    self._send_mp3_safe(addr, b)
-                    time.sleep(0.05)
+                print(f"开场白共 {len(seg_list)} 段，session={session_id}")
+                self._send_audio_segments_with_session(addr, seg_list, session_id)
             else:
-                # 兜底：整段发送（可能会触发分片）
+                # 兜底：整段发送
                 mp3_bytes = self.tts_udp.generate_mp3_from_stream(opening_stream)
                 if mp3_bytes:
-                    print(f"开场白 MP3 大小: {len(mp3_bytes)} 字节")
-                    self._send_mp3_safe(addr, mp3_bytes)
+                    chunk_id = self.get_next_chunk_id(addr)
+                    self._send_mp3_with_session(addr, mp3_bytes, session_id, chunk_id)
+
         except Exception as e:
             print(f"开场白发送失败: {e}")
 
@@ -214,6 +256,52 @@ class UDPVoiceServer:
             except Exception as e:
                 print(f"片段 {i+1} 发送失败: {e}")
                 break
+
+    # === 新增：支持Session和Chunk的音频发送方法 ===
+    def _send_mp3_with_session(self, addr: Tuple[str,int], mp3_bytes: bytes,
+                              session_id: str, chunk_id: int):
+        """发送带session和chunk ID的MP3数据"""
+        try:
+            # 使用新的协议打包
+            packet = ADPCMProtocol.pack_audio_with_session(
+                mp3_bytes, session_id, chunk_id, ADPCMProtocol.COMPRESSION_TTS_MP3
+            )
+
+            # 检查UDP包大小限制
+            if len(packet) > 65000:  # UDP最大包大小限制
+                print(f"⚠️ 包过大 ({len(packet)} 字节)，session={session_id}, chunk={chunk_id}")
+                # TODO: 实现大包分片逻辑（暂时跳过）
+                return False
+
+            self.sock.sendto(packet, addr)
+            print(f"✅ 发送MP3 session={session_id}, chunk={chunk_id}, 大小={len(mp3_bytes)}字节 -> {addr}")
+            return True
+
+        except Exception as e:
+            print(f"❌ 发送MP3失败 session={session_id}, chunk={chunk_id}: {e}")
+            return False
+
+    def _send_audio_segments_with_session(self, addr: Tuple[str,int],
+                                        mp3_segments: list, session_id: str):
+        """发送一系列MP3片段，每个片段都带session和递增的chunk ID"""
+        if not mp3_segments:
+            print(f"⚠️ 没有音频片段可发送，session={session_id}")
+            return
+
+        print(f"📤 开始发送 {len(mp3_segments)} 个音频片段，session={session_id}")
+
+        for i, mp3_data in enumerate(mp3_segments, 1):
+            chunk_id = self.get_next_chunk_id(addr)
+            success = self._send_mp3_with_session(addr, mp3_data, session_id, chunk_id)
+
+            if success:
+                # 小延迟确保客户端按序接收
+                time.sleep(0.1)
+            else:
+                print(f"❌ 片段 {i}/{len(mp3_segments)} 发送失败，停止发送")
+                break
+
+        print(f"📤 音频片段发送完成，session={session_id}")
 
     def reset_client_session(self, addr: Tuple[str,int]):
         """重置指定客户端的会话状态"""

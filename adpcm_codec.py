@@ -195,6 +195,64 @@ class ADPCMProtocol:
         """打包控制命令（无负载）"""
         return struct.pack('!BI', cmd, 0)
 
+    # === 新增：支持Session和Chunk ID的协议方法 ===
+    @staticmethod
+    def pack_audio_with_session(audio_data: bytes, session_id: str, chunk_id: int,
+                               compression_type: int = COMPRESSION_TTS_MP3) -> bytes:
+        """
+        打包带session_id和chunk_id的音频数据
+
+        格式: [1字节压缩类型][4字节总长度][8字节session_id][4字节chunk_id][音频数据]
+
+        Args:
+            audio_data: 音频数据（MP3字节）
+            session_id: 会话ID（8字符字符串）
+            chunk_id: 音频片段ID（32位整数）
+            compression_type: 压缩类型标识
+
+        Returns:
+            bytes: 打包后的网络数据包
+        """
+        # session_id转为8字节，不足补0
+        session_bytes = session_id.encode('utf-8')[:8].ljust(8, b'\x00')
+
+        # 计算总数据长度：8字节session + 4字节chunk_id + 音频数据长度
+        total_data_length = 8 + 4 + len(audio_data)
+
+        # 打包：[类型][总长度][session][chunk_id][音频数据]
+        header = struct.pack('!BI8sI', compression_type, total_data_length,
+                           session_bytes, chunk_id)
+        return header + audio_data
+
+    @staticmethod
+    def unpack_audio_with_session(packet: bytes) -> Tuple[int, str, int, bytes]:
+        """
+        解包带session_id和chunk_id的音频数据包
+
+        Args:
+            packet: 网络数据包
+
+        Returns:
+            Tuple[int, str, int, bytes]: (压缩类型, session_id, chunk_id, 音频数据)
+        """
+        if len(packet) < 17:  # 1+4+8+4 = 17字节最小头部
+            raise ValueError("数据包太小，无法包含session和chunk信息")
+
+        # 解包头部
+        compression_type, total_length, session_bytes, chunk_id = struct.unpack('!BI8sI', packet[:17])
+
+        # 检查数据完整性
+        if len(packet) < 5 + total_length:
+            raise ValueError("数据包不完整")
+
+        # 解析session_id
+        session_id = session_bytes.decode('utf-8').rstrip('\x00')
+
+        # 提取音频数据
+        audio_data = packet[17:5+total_length]
+
+        return compression_type, session_id, chunk_id, audio_data
+
 
 def benchmark_adpcm():
     """ADPCM性能基准测试"""

@@ -15,6 +15,7 @@ import tempfile
 import os
 import logging
 import json
+import struct
 
 import numpy as np
 import sounddevice as sd
@@ -95,12 +96,26 @@ class GUIClient:
             try:
                 self.sock.settimeout(2.0)
                 pkt, _ = self.sock.recvfrom(self.max_udp_size)
+
+                # 尝试解析新格式（带session和chunk ID）
+                try:
+                    t, session_id, chunk_id, payload = ADPCMProtocol.unpack_audio_with_session(pkt)
+                    if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
+                        self.log(f"📦 收到音频: session={session_id}, chunk={chunk_id}, 大小={len(payload)}字节")
+                        # TODO: 这里将来会加入播放队列和打断逻辑
+                        # 现在先直接播放
+                        self._play_mp3_bytes(payload)
+                        backoff = 0.1
+                        continue
+                except (ValueError, struct.error):
+                    # 新格式解析失败，尝试旧格式
+                    pass
+
+                # 回退到旧格式处理
                 t, payload = ADPCMProtocol.unpack_audio_packet(pkt)
                 if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
-                    # 兼容两种格式：
-                    # A) 直接MP3字节（单包）
-                    # B) 自定义分片头: [uint16 总片数][uint16 当前序号] + MP3数据
-                    import struct
+                    self.log(f"📦 收到旧格式音频，大小={len(payload)}字节")
+                    # 兼容旧的分片逻辑（保留用于向后兼容）
                     now = time.time()
                     if len(payload) >= 4:
                         total, idx = struct.unpack('!HH', payload[:4])
