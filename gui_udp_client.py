@@ -23,6 +23,7 @@ import sounddevice as sd
 from tkinter import Tk, Button, Text, END, DISABLED, NORMAL, PhotoImage
 
 from adpcm_codec import ADPCMCodec, ADPCMProtocol
+from websocket_signal import InterruptSignalClient
 
 @dataclass
 class AudioChunk:
@@ -235,6 +236,15 @@ class GUIClient:
         self.audio_queue = AudioPlayQueue(max_size=5)
         self.audio_queue.set_log_callback(self.log)
 
+        # WebSocket信令客户端（新增）
+        self.interrupt_client = InterruptSignalClient(
+            server_host=self.server[0],  # 使用UDP服务器的IP
+            server_port=31001            # WebSocket端口
+        )
+        self.interrupt_client.set_log_callback(self.log)
+        self.interrupt_client.set_interrupt_callback(self._handle_interrupt_signal)
+        self.interrupt_client.set_start_session_callback(self._handle_start_session_signal)
+
         # 日志到文件
         log_dir = os.path.dirname(config["logging"]["file"])
         if log_dir:
@@ -393,6 +403,20 @@ class GUIClient:
         success = self.audio_queue.add_chunk(chunk)
         if not success:
             self.log(f"⚠️ 音频chunk添加失败: session={session_id}, chunk={chunk_id}")
+
+    def _handle_interrupt_signal(self, session_id: str, interrupt_after_chunk: int):
+        """处理打断信号"""
+        self.log(f"🛑 处理打断信号: session={session_id}, interrupt_after_chunk={interrupt_after_chunk}")
+
+        # 设置音频队列的打断水位线
+        self.audio_queue.set_interrupt_watermark(session_id, interrupt_after_chunk)
+
+    def _handle_start_session_signal(self, session_id: str):
+        """处理新session开始信号"""
+        self.log(f"🎵 处理新session信号: session={session_id}")
+
+        # 启动新的播放session
+        self.audio_queue.start_new_session(session_id)
 
     def _play_mp3_bytes(self, audio_bytes: bytes):
         self.log(f"🔊 开始播放MP3，大小: {len(audio_bytes)} 字节")
@@ -573,6 +597,10 @@ class GUIClient:
             )
             self.stream.start()
             self.running = True
+
+            # 启动WebSocket信令客户端
+            self.interrupt_client.start(self.server[0], self.server[1])
+
             self.log("🎙️ 已开始采集，等待开场白...")
         except Exception as e:
             self.log(f"audio stream error: {e}")
@@ -591,6 +619,9 @@ class GUIClient:
         try:
             # 停止音频播放队列
             self.audio_queue.stop()
+
+            # 停止WebSocket信令客户端
+            self.interrupt_client.stop()
 
             if self.stream:
                 self.stream.stop(); self.stream.close()

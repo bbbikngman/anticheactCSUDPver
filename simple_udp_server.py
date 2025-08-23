@@ -28,6 +28,7 @@ if WHISPER_DIR not in sys.path:
     sys.path.insert(0, WHISPER_DIR)
 
 from whisper.brain_ai_module import KimiAI
+from websocket_signal import InterruptSignalServer
 from tts_module_udp_adapter import TTSModuleUDPAdapter
 
 UDP_PORT = 31000
@@ -84,6 +85,10 @@ class UDPVoiceServer:
         self.client_chunk_counters: Dict[Tuple[str,int], int] = {} # {addr: chunk_counter}
         self.client_interrupt_cooldown: Dict[Tuple[str,int], float] = {} # {addr: next_allowed_time}
 
+        # WebSocket信令服务器 (新增)
+        self.interrupt_server = InterruptSignalServer(host="0.0.0.0", port=31001)
+        self.interrupt_server.set_log_callback(self._log_websocket)
+
     def _kill_existing_process(self, port: int):
         """尝试杀死占用指定端口的进程"""
         import subprocess
@@ -127,13 +132,26 @@ class UDPVoiceServer:
         self.client_welcomed = set()  # 记录已发送开场白的客户端
 
     def start(self):
+        self.running = True
+
+        # 启动WebSocket信令服务器
+        self.interrupt_server.start()
+
         print(f"UDPVoiceServer listening on {self.addr}")
         self.recv_thread.start()
         self.proc_thread.start()
 
     def stop(self):
         self.running = False
+
+        # 停止WebSocket信令服务器
+        self.interrupt_server.stop()
+
         self.sock.close()
+
+    def _log_websocket(self, message: str):
+        """WebSocket信令服务器日志回调"""
+        print(f"[WebSocket] {message}")
 
     def _get_client_codec(self, addr: Tuple[str,int]) -> ADPCMCodec:
         if addr not in self.client_codecs:
