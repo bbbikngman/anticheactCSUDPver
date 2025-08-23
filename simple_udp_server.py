@@ -272,9 +272,14 @@ class UDPVoiceServer:
 
     def _update_websocket_binding(self, actual_addr: Tuple[str,int]):
         """更新WebSocket地址绑定"""
+        # 检查实际客户端地址是否已经绑定
+        if self.interrupt_server.bind_udp_address(actual_addr):
+            # 已经绑定了，不需要更新
+            return
+
+        # 查找是否有服务器地址的绑定需要更新
         server_addr = (self.addr[0] if self.addr[0] != '0.0.0.0' else '127.0.0.1', self.addr[1])
 
-        # 检查是否有对应的WebSocket连接
         if self.interrupt_server.bind_udp_address(server_addr):
             # 更新绑定到实际客户端地址
             success = self.interrupt_server.update_udp_binding(server_addr, actual_addr)
@@ -282,6 +287,7 @@ class UDPVoiceServer:
                 print(f"🔄 WebSocket绑定已更新: {server_addr} -> {actual_addr}")
             else:
                 print(f"⚠️ WebSocket绑定更新失败: {server_addr} -> {actual_addr}")
+        # 如果都没找到，说明WebSocket还没连接，这是正常的
 
     def _atomic_interrupt_check_and_trigger(self, addr: Tuple[str,int], transcription: str) -> bool:
         """原子化的打断检查和触发"""
@@ -317,7 +323,7 @@ class UDPVoiceServer:
                 print(f"🚫 无活跃session，不触发打断")
                 return False
 
-            # 检查WebSocket连接
+            # 检查WebSocket连接（直接使用实际客户端地址）
             if not self.interrupt_server.bind_udp_address(addr):
                 print(f"⚠️ WebSocket未连接，跳过打断: {addr}")
                 print(f"🔍 当前WebSocket绑定: {list(self.interrupt_server.udp_bindings.keys())}")
@@ -334,7 +340,8 @@ class UDPVoiceServer:
                     return False
 
                 # 生成新session
-                new_session_id = self._generate_session_id()
+                import uuid
+                new_session_id = str(uuid.uuid4())[:8]
 
                 # 原子化更新状态
                 with self.session_lock:

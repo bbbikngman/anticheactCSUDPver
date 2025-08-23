@@ -251,38 +251,60 @@ class InterruptSignalServer:
             self.log(f"❌ 发送信令失败: {e}")
             return False
     
-    def send_interrupt_signal(self, udp_addr: Tuple[str, int], session_id: str, interrupt_after_chunk: int):
+    def send_interrupt_signal(self, udp_addr: Tuple[str, int], session_id: str, interrupt_after_chunk: int) -> bool:
         """发送打断信号（同步接口）"""
         if not self.loop:
             self.log("⚠️ WebSocket服务器未运行")
-            return
-        
+            return False
+
         interrupt_msg = SignalMessage("interrupt", {
             "session_id": session_id,
             "interrupt_after_chunk": interrupt_after_chunk
         })
-        
-        # 在事件循环中执行异步发送
-        asyncio.run_coroutine_threadsafe(
-            self.send_to_udp_client(udp_addr, interrupt_msg),
-            self.loop
-        )
+
+        try:
+            # 在事件循环中执行异步发送
+            future = asyncio.run_coroutine_threadsafe(
+                self.send_to_udp_client(udp_addr, interrupt_msg),
+                self.loop
+            )
+            # 等待一小段时间获取结果，避免阻塞太久
+            result = future.result(timeout=0.1)
+            return result
+        except asyncio.TimeoutError:
+            # 超时但任务已提交，认为发送成功
+            self.log(f"📤 打断信号已提交发送: {udp_addr}")
+            return True
+        except Exception as e:
+            self.log(f"❌ 打断信号发送异常: {e}")
+            return False
     
-    def send_start_session_signal(self, udp_addr: Tuple[str, int], session_id: str):
+    def send_start_session_signal(self, udp_addr: Tuple[str, int], session_id: str) -> bool:
         """发送新session开始信号（同步接口）"""
         if not self.loop:
             self.log("⚠️ WebSocket服务器未运行")
-            return
-        
+            return False
+
         start_msg = SignalMessage("start_session", {
             "session_id": session_id
         })
-        
-        # 在事件循环中执行异步发送
-        asyncio.run_coroutine_threadsafe(
-            self.send_to_udp_client(udp_addr, start_msg),
-            self.loop
-        )
+
+        try:
+            # 在事件循环中执行异步发送
+            future = asyncio.run_coroutine_threadsafe(
+                self.send_to_udp_client(udp_addr, start_msg),
+                self.loop
+            )
+            # 等待一小段时间获取结果，避免阻塞太久
+            result = future.result(timeout=0.1)
+            return result
+        except asyncio.TimeoutError:
+            # 超时但任务已提交，认为发送成功
+            self.log(f"📤 新session信号已提交发送: {udp_addr}")
+            return True
+        except Exception as e:
+            self.log(f"❌ 新session信号发送异常: {e}")
+            return False
 
 class InterruptSignalClient:
     """WebSocket信令客户端"""
