@@ -212,6 +212,24 @@ class InterruptSignalServer:
     def bind_udp_address(self, udp_addr: Tuple[str, int]) -> bool:
         """检查UDP地址是否已绑定"""
         return udp_addr in self.udp_bindings
+
+    def update_udp_binding(self, old_addr: Tuple[str, int], new_addr: Tuple[str, int]) -> bool:
+        """更新UDP地址绑定"""
+        # 查找对应的WebSocket连接
+        client_addr = None
+        for addr, ws_addr in self.udp_bindings.items():
+            if addr == old_addr:
+                client_addr = ws_addr
+                break
+
+        if client_addr:
+            # 更新绑定
+            del self.udp_bindings[old_addr]
+            self.udp_bindings[new_addr] = client_addr
+            self.log(f"🔄 更新UDP绑定: {old_addr} -> {new_addr}")
+            return True
+
+        return False
     
     async def send_to_udp_client(self, udp_addr: Tuple[str, int], signal_msg: SignalMessage) -> bool:
         """向指定UDP客户端发送信令消息"""

@@ -239,11 +239,14 @@ class GUIClient:
         # WebSocket信令客户端（新增）
         self.interrupt_client = InterruptSignalClient(
             server_host=self.server[0],  # 使用UDP服务器的IP
-            server_port=31001            # WebSocket端口
+            server_port=31003            # WebSocket端口
         )
         self.interrupt_client.set_log_callback(self.log)
         self.interrupt_client.set_interrupt_callback(self._handle_interrupt_signal)
         self.interrupt_client.set_start_session_callback(self._handle_start_session_signal)
+
+        # WebSocket连接状态
+        self.websocket_started = False
 
         # 日志到文件
         log_dir = os.path.dirname(config["logging"]["file"])
@@ -266,7 +269,12 @@ class GUIClient:
         while True:
             try:
                 self.sock.settimeout(2.0)
-                pkt, _ = self.sock.recvfrom(self.max_udp_size)
+                pkt, server_addr = self.sock.recvfrom(self.max_udp_size)
+
+                # 启动WebSocket连接（仅第一次）
+                if not self.websocket_started:
+                    self._start_websocket_connection()
+                    self.websocket_started = True
 
                 # 尝试解析新格式（带session和chunk ID，支持分包）
                 try:
@@ -417,6 +425,20 @@ class GUIClient:
 
         # 启动新的播放session
         self.audio_queue.start_new_session(session_id)
+
+    def _start_websocket_connection(self):
+        """启动WebSocket连接"""
+        try:
+            # 使用服务器地址作为标识，服务器会用实际收到UDP包的地址来绑定
+            # 这样避免了客户端地址获取的复杂性
+            server_ip = self.server[0]
+            server_port = self.server[1]
+
+            self.log(f"🔗 启动WebSocket连接，目标服务器: {server_ip}:{server_port}")
+            self.interrupt_client.start(server_ip, server_port)
+
+        except Exception as e:
+            self.log(f"⚠️ WebSocket连接启动失败: {e}")
 
     def _play_mp3_bytes(self, audio_bytes: bytes):
         self.log(f"🔊 开始播放MP3，大小: {len(audio_bytes)} 字节")
@@ -598,10 +620,8 @@ class GUIClient:
             self.stream.start()
             self.running = True
 
-            # 启动WebSocket信令客户端
-            self.interrupt_client.start(self.server[0], self.server[1])
-
             self.log("🎙️ 已开始采集，等待开场白...")
+            self.log("🔗 WebSocket将在收到第一个音频包后启动...")
         except Exception as e:
             self.log(f"audio stream error: {e}")
 

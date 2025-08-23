@@ -111,8 +111,11 @@ class UDPVoiceServer:
         # 打断功能控制 (新增)
         self.interrupt_enabled = True  # 全局打断开关
 
+        # WebSocket地址映射 (新增)
+        self.websocket_address_map = {}  # {server_addr: actual_client_addr}
+
         # WebSocket信令服务器 (新增)
-        self.interrupt_server = InterruptSignalServer(host="0.0.0.0", port=31001)
+        self.interrupt_server = InterruptSignalServer(host="0.0.0.0", port=31003)
         self.interrupt_server.set_log_callback(self._log_websocket)
 
     def _kill_existing_process(self, port: int):
@@ -232,8 +235,10 @@ class UDPVoiceServer:
             print(f"🚫 组合语气词过滤，不触发打断: '{text}'")
             return False
 
-        # 重复字符检查（如"啊啊啊啊"）
-        if len(set(text.replace(' ', ''))) <= 2 and len(text) >= 3:
+        # 重复字符检查（如"啊啊啊啊"），但排除有意义的重复词
+        meaningful_repeats = {'喂喂', '喂喂喂', '你好你好', 'hello', 'hellohi'}
+        if (len(set(text.replace(' ', ''))) <= 2 and len(text) >= 3 and
+            text not in meaningful_repeats):
             print(f"🚫 重复字符过滤，不触发打断: '{text}'")
             return False
 
@@ -264,6 +269,19 @@ class UDPVoiceServer:
             self.client_states[addr]['interrupt_cooldown'] = cooldown_time
 
         print(f"⏰ 设置{cooldown_type}冷却: {cooldown_time - now:.1f}秒")
+
+    def _update_websocket_binding(self, actual_addr: Tuple[str,int]):
+        """更新WebSocket地址绑定"""
+        server_addr = (self.addr[0] if self.addr[0] != '0.0.0.0' else '127.0.0.1', self.addr[1])
+
+        # 检查是否有对应的WebSocket连接
+        if self.interrupt_server.bind_udp_address(server_addr):
+            # 更新绑定到实际客户端地址
+            success = self.interrupt_server.update_udp_binding(server_addr, actual_addr)
+            if success:
+                print(f"🔄 WebSocket绑定已更新: {server_addr} -> {actual_addr}")
+            else:
+                print(f"⚠️ WebSocket绑定更新失败: {server_addr} -> {actual_addr}")
 
     def _atomic_interrupt_check_and_trigger(self, addr: Tuple[str,int], transcription: str) -> bool:
         """原子化的打断检查和触发"""
@@ -301,7 +319,8 @@ class UDPVoiceServer:
 
             # 检查WebSocket连接
             if not self.interrupt_server.bind_udp_address(addr):
-                print(f"⚠️ WebSocket未连接，跳过打断")
+                print(f"⚠️ WebSocket未连接，跳过打断: {addr}")
+                print(f"🔍 当前WebSocket绑定: {list(self.interrupt_server.udp_bindings.keys())}")
                 return False
 
             # 3. 原子化执行打断
@@ -613,6 +632,9 @@ class UDPVoiceServer:
                 if compression_type == ADPCMProtocol.COMPRESSION_ADPCM:
                     # 更新客户端活动时间
                     self.client_last_activity[addr] = time.time()
+
+                    # 更新WebSocket地址绑定
+                    self._update_websocket_binding(addr)
 
                     # 新客户端首次连接，立即发送开场白
                     if addr not in self.client_welcomed:
