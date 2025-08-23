@@ -16,12 +16,166 @@ import os
 import logging
 import json
 import struct
+from dataclasses import dataclass
 
 import numpy as np
 import sounddevice as sd
 from tkinter import Tk, Button, Text, END, DISABLED, NORMAL, PhotoImage
 
 from adpcm_codec import ADPCMCodec, ADPCMProtocol
+
+@dataclass
+class AudioChunk:
+    """音频块数据结构"""
+    data: bytes
+    session_id: str
+    chunk_id: int
+    timestamp: float
+
+class AudioPlayQueue:
+    """音频播放队列，支持打断功能"""
+
+    def __init__(self, max_size=5):
+        self.queue = queue.Queue(max_size)
+        self.current_session = ""
+        self.max_playable_chunk_id = float('inf')  # 打断水位线
+        self.playing = False
+        self.play_thread = None
+        self.stop_event = threading.Event()
+        self.log_callback = None  # 日志回调函数
+
+    def set_log_callback(self, callback):
+        """设置日志回调函数"""
+        self.log_callback = callback
+
+    def log(self, message):
+        """记录日志"""
+        if self.log_callback:
+            self.log_callback(message)
+        else:
+            print(message)
+
+    def add_chunk(self, chunk: AudioChunk) -> bool:
+        """添加音频chunk到队列"""
+        try:
+            self.queue.put_nowait(chunk)
+            self.log(f"📥 音频入队: session={chunk.session_id}, chunk={chunk.chunk_id}, 队列大小={self.queue.qsize()}")
+            return True
+        except queue.Full:
+            self.log("⚠️ 音频队列已满，丢弃最旧的chunk")
+            try:
+                # 移除最旧的chunk
+                old_chunk = self.queue.get_nowait()
+                self.log(f"🗑️ 丢弃旧chunk: session={old_chunk.session_id}, chunk={old_chunk.chunk_id}")
+                # 添加新chunk
+                self.queue.put_nowait(chunk)
+                self.log(f"📥 音频入队: session={chunk.session_id}, chunk={chunk.chunk_id}, 队列大小={self.queue.qsize()}")
+                return True
+            except queue.Empty:
+                return False
+
+    def should_play_chunk(self, chunk: AudioChunk) -> bool:
+        """检查chunk是否应该播放（打断逻辑）"""
+        return (chunk.session_id == self.current_session and
+                chunk.chunk_id <= self.max_playable_chunk_id)
+
+    def set_interrupt_watermark(self, session_id: str, max_playable_chunk_id: int):
+        """设置打断水位线"""
+        self.log(f"🛑 设置打断水位线: session={session_id}, max_chunk={max_playable_chunk_id}")
+        if session_id == self.current_session:
+            self.max_playable_chunk_id = max_playable_chunk_id
+
+    def start_new_session(self, session_id: str):
+        """开始新的播放session"""
+        self.log(f"🎵 开始新session: {session_id}")
+        self.current_session = session_id
+        self.max_playable_chunk_id = float('inf')  # 新session默认无限制
+
+        # 启动播放线程（如果还没启动）
+        if not self.playing:
+            self.playing = True
+            self.stop_event.clear()
+            self.play_thread = threading.Thread(target=self._play_loop, daemon=True)
+            self.play_thread.start()
+            self.log("🎵 播放线程已启动")
+
+    def stop(self):
+        """停止播放队列"""
+        self.playing = False
+        self.stop_event.set()
+        if self.play_thread and self.play_thread.is_alive():
+            self.play_thread.join(timeout=1.0)
+        self.log("🛑 播放队列已停止")
+
+    def _play_loop(self):
+        """播放循环线程"""
+        self.log("🎵 播放线程开始运行")
+        while self.playing and not self.stop_event.is_set():
+            try:
+                # 从队列获取音频chunk，超时1秒
+                chunk = self.queue.get(timeout=1.0)
+
+                # 检查是否应该播放这个chunk
+                if self.should_play_chunk(chunk):
+                    self.log(f"🔊 播放chunk: session={chunk.session_id}, chunk={chunk.chunk_id}")
+                    self._play_chunk_data(chunk.data)
+                else:
+                    self.log(f"⏭️ 跳过chunk: session={chunk.session_id}, chunk={chunk.chunk_id} (被打断)")
+
+            except queue.Empty:
+                # 队列为空，继续等待
+                continue
+            except Exception as e:
+                self.log(f"❌ 播放错误: {e}")
+
+        self.log("🎵 播放线程结束")
+
+    def _play_chunk_data(self, data: bytes):
+        """播放单个chunk的数据"""
+        try:
+            # 创建临时文件
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
+                tmp.write(data)
+                path = tmp.name
+
+            self.log(f"📁 临时文件创建: {path}")
+
+            try:
+                import pygame
+
+                # 重新初始化mixer，确保干净状态
+                if pygame.mixer.get_init():
+                    pygame.mixer.quit()
+
+                pygame.mixer.init()
+                self.log("🎵 pygame mixer 初始化成功")
+
+                # 加载并播放音频
+                pygame.mixer.music.load(path)
+                pygame.mixer.music.play()
+                self.log("▶️ 开始播放音频...")
+
+                # 等待播放完成
+                while pygame.mixer.music.get_busy():
+                    if self.stop_event.is_set():
+                        pygame.mixer.music.stop()
+                        break
+                    time.sleep(0.1)
+
+                self.log("✅ 音频播放完成")
+
+            except Exception as e:
+                self.log(f"❌ pygame播放失败: {e}")
+            finally:
+                # 清理临时文件
+                try:
+                    os.unlink(path)
+                    self.log(f"🗑️ 临时文件已删除: {path}")
+                except Exception as e:
+                    self.log(f"⚠️ 临时文件删除失败: {e}")
+
+        except Exception as e:
+            self.log(f"❌ 播放chunk失败: {e}")
 
 def load_config(config_file="client_config.json"):
     """加载配置文件"""
@@ -77,6 +231,10 @@ class GUIClient:
         # 分包重组状态管理
         self.fragment_buffers = {}  # {(session_id, chunk_id): {fragments: {}, total: int, start_time: float}}
 
+        # 音频播放队列（新增）
+        self.audio_queue = AudioPlayQueue(max_size=5)
+        self.audio_queue.set_log_callback(self.log)
+
         # 日志到文件
         log_dir = os.path.dirname(config["logging"]["file"])
         if log_dir:
@@ -105,9 +263,9 @@ class GUIClient:
                     t, session_id, chunk_id, fragment_index, total_fragments, payload = ADPCMProtocol.unpack_audio_with_session(pkt)
                     if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
                         if total_fragments == 1:
-                            # 单包，直接播放
+                            # 单包，放入播放队列
                             self.log(f"📦 收到音频: session={session_id}, chunk={chunk_id}, 大小={len(payload)}字节")
-                            self._play_mp3_bytes(payload)
+                            self._add_audio_to_queue(session_id, chunk_id, payload)
                         else:
                             # 分包，需要重组
                             self.log(f"📦 收到分包: session={session_id}, chunk={chunk_id}, 分包={fragment_index+1}/{total_fragments}, 大小={len(payload)}字节")
@@ -214,9 +372,27 @@ class GUIClient:
             # 清理缓存
             del self.fragment_buffers[key]
 
-            # 播放重组后的音频
-            self.log(f"🎵 分包重组完成，播放音频: session={session_id}, chunk={chunk_id}, 总大小={len(complete_data)}字节")
-            self._play_mp3_bytes(complete_data)
+            # 将重组后的音频放入播放队列
+            self.log(f"🎵 分包重组完成，放入播放队列: session={session_id}, chunk={chunk_id}, 总大小={len(complete_data)}字节")
+            self._add_audio_to_queue(session_id, chunk_id, complete_data)
+
+    def _add_audio_to_queue(self, session_id: str, chunk_id: int, audio_data: bytes):
+        """将音频数据添加到播放队列"""
+        # 检查是否是新的session
+        if session_id != self.audio_queue.current_session:
+            self.audio_queue.start_new_session(session_id)
+
+        # 创建AudioChunk并添加到队列
+        chunk = AudioChunk(
+            data=audio_data,
+            session_id=session_id,
+            chunk_id=chunk_id,
+            timestamp=time.time()
+        )
+
+        success = self.audio_queue.add_chunk(chunk)
+        if not success:
+            self.log(f"⚠️ 音频chunk添加失败: session={session_id}, chunk={chunk_id}")
 
     def _play_mp3_bytes(self, audio_bytes: bytes):
         self.log(f"🔊 开始播放MP3，大小: {len(audio_bytes)} 字节")
@@ -413,6 +589,9 @@ class GUIClient:
 
     def close(self):
         try:
+            # 停止音频播放队列
+            self.audio_queue.stop()
+
             if self.stream:
                 self.stream.stop(); self.stream.close()
         except:
