@@ -748,13 +748,26 @@ class UDPVoiceServer:
                         self._send_opening_statement(addr)
 
                     codec = self._get_client_codec(addr)
-                    float_block = codec.decode(payload)  # float32 PCM ~512
-                    q = self._get_client_queue(addr)
                     try:
-                        q.put_nowait(float_block)
-                    except queue.Full:
-                        _ = q.get_nowait()
-                        q.put_nowait(float_block)
+                        float_block = codec.decode(payload)  # float32 PCM ~512
+
+                        # 检查解码结果
+                        if len(float_block) == 0:
+                            print(f"⚠️ ADPCM解码产生空块，payload大小: {len(payload)}")
+                            continue
+                        elif len(float_block) < 512:
+                            print(f"⚠️ ADPCM解码块太短: {len(float_block)} 采样，payload大小: {len(payload)}")
+                            continue
+
+                        q = self._get_client_queue(addr)
+                        try:
+                            q.put_nowait(float_block)
+                        except queue.Full:
+                            _ = q.get_nowait()
+                            q.put_nowait(float_block)
+
+                    except Exception as e:
+                        print(f"❌ ADPCM解码失败: {e}, payload大小: {len(payload)}")
                 elif compression_type == ADPCMProtocol.CONTROL_RESET:
                     self.reset_client_session(addr)
                 elif compression_type == ADPCMProtocol.CONTROL_HELLO:
@@ -779,9 +792,24 @@ class UDPVoiceServer:
                     while not q.empty():
                         float_block = q.get_nowait()
                         processed_any = True
-                        is_speech = self.vad.is_speech(float_block)
-                        handler = self._get_client_handler(addr)
-                        triggered = handler.process_chunk(float_block, is_speech)
+
+                        # 检查音频块大小
+                        if len(float_block) < 512:  # 最小块大小检查
+                            print(f"⚠️ 音频块太短: {len(float_block)} 采样，跳过处理")
+                            continue
+
+                        try:
+                            is_speech = self.vad.is_speech(float_block)
+                        except Exception as e:
+                            print(f"❌ VAD处理失败: {e}, 音频块大小: {len(float_block)}")
+                            continue
+
+                        try:
+                            handler = self._get_client_handler(addr)
+                            triggered = handler.process_chunk(float_block, is_speech)
+                        except Exception as e:
+                            print(f"❌ 音频处理失败: {e}, 音频块大小: {len(float_block)}")
+                            continue
                         if triggered is not None:
                             print(f"客户端 {addr} 触发转写，音频长度: {len(triggered)} 采样")
                             # 触发：整段 audio → 真实链路（转写→LLM→TTS）
