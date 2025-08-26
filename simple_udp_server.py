@@ -509,7 +509,7 @@ class UDPVoiceServer:
 
         if len(mp3_bytes) > max_payload:
             print(f"⚠️ MP3 过大 ({len(mp3_bytes)} 字节)，分片发送...")
-            self._send_large_mp3_with_session(addr, mp3_bytes, session_id, chunk_id)
+            self._send_mp3_with_session(addr, mp3_bytes, session_id, chunk_id)
         else:
             try:
                 packet = ADPCMProtocol.pack_audio_with_session(
@@ -524,29 +524,7 @@ class UDPVoiceServer:
             except Exception as e:
                 print(f"MP3 发送失败: {e}")
 
-    def _send_large_mp3_with_session(self, addr: Tuple[str,int], mp3_bytes: bytes, session_id: str, chunk_id: int):
-        """分片发送大的 MP3 文件（带session/chunk）"""
-        import struct
-        chunk_size = 50000  # 50KB 每片
-        total_chunks = (len(mp3_bytes) + chunk_size - 1) // chunk_size
 
-        for i in range(total_chunks):
-            start = i * chunk_size
-            end = min(start + chunk_size, len(mp3_bytes))
-            chunk_data = mp3_bytes[start:end]
-
-            try:
-                packet = ADPCMProtocol.pack_audio_with_session(
-                    chunk_data, session_id, chunk_id, ADPCMProtocol.COMPRESSION_TTS_MP3,
-                    fragment_index=i, total_fragments=total_chunks
-                )
-                self.sock.sendto(packet, addr)
-                print(f"发送片段 {i+1}/{total_chunks} 给 {addr}")
-            except Exception as e:
-                print(f"分片 {i+1} 发送失败: {e}")
-
-        # 更新客户端状态
-        self._update_client_chunk(addr, session_id, chunk_id)
 
     def _send_large_mp3(self, addr: Tuple[str,int], mp3_bytes: bytes):
         """分片发送大的 MP3 文件（旧版本，保持兼容）"""
