@@ -345,9 +345,12 @@ class UDPVoiceServer:
                         'last_interrupt_time': now
                     })
                     # 注意：不更新active_session，保持当前session继续对话
+                    # 重置chunk计数器，新对话从chunk=1开始
+                    self.client_chunk_counters[addr] = 0
 
                 print(f"✅ 打断完成: session={current_session}, chunk={current_chunk}")
                 print(f"🛑 打断水位线: chunk={current_chunk}, 冷却到={now + self.INTERRUPT_COOLDOWN}")
+                print(f"🔄 重置chunk计数器，新对话从chunk=1开始")
 
                 return True
 
@@ -441,21 +444,54 @@ class UDPVoiceServer:
 
     def _send_mp3_safe(self, addr: Tuple[str,int], mp3_bytes: bytes):
         """安全发送 MP3（自动处理分片）"""
+        session_id = self.get_current_session_id(addr)
+        chunk_id = self.get_next_chunk_id(addr)
+
         # 检查 UDP 包大小限制
         max_payload = 60000  # 留一些余量给协议头
         if len(mp3_bytes) > max_payload:
             print(f"⚠️ MP3 过大 ({len(mp3_bytes)} 字节)，分片发送...")
-            self._send_large_mp3(addr, mp3_bytes)
+            self._send_large_mp3_with_session(addr, mp3_bytes, session_id, chunk_id)
         else:
             try:
-                down = ADPCMProtocol.pack_audio_packet(mp3_bytes, ADPCMProtocol.COMPRESSION_TTS_MP3)
-                self.sock.sendto(down, addr)
-                print(f"✅ MP3 发送成功给 {addr}")
+                packet = ADPCMProtocol.pack_audio_with_session(
+                    mp3_bytes, session_id, chunk_id, ADPCMProtocol.COMPRESSION_TTS_MP3,
+                    fragment_index=0, total_fragments=1
+                )
+                self.sock.sendto(packet, addr)
+                print(f"✅ 发送MP3 session={session_id}, chunk={chunk_id}, 大小={len(mp3_bytes)}字节 -> {addr}")
+
+                # 更新客户端状态
+                self._update_client_chunk(addr, session_id, chunk_id)
             except Exception as e:
                 print(f"MP3 发送失败: {e}")
 
+    def _send_large_mp3_with_session(self, addr: Tuple[str,int], mp3_bytes: bytes, session_id: str, chunk_id: int):
+        """分片发送大的 MP3 文件（带session/chunk）"""
+        import struct
+        chunk_size = 50000  # 50KB 每片
+        total_chunks = (len(mp3_bytes) + chunk_size - 1) // chunk_size
+
+        for i in range(total_chunks):
+            start = i * chunk_size
+            end = min(start + chunk_size, len(mp3_bytes))
+            chunk_data = mp3_bytes[start:end]
+
+            try:
+                packet = ADPCMProtocol.pack_audio_with_session(
+                    chunk_data, session_id, chunk_id, ADPCMProtocol.COMPRESSION_TTS_MP3,
+                    fragment_index=i, total_fragments=total_chunks
+                )
+                self.sock.sendto(packet, addr)
+                print(f"发送片段 {i+1}/{total_chunks} 给 {addr}")
+            except Exception as e:
+                print(f"分片 {i+1} 发送失败: {e}")
+
+        # 更新客户端状态
+        self._update_client_chunk(addr, session_id, chunk_id)
+
     def _send_large_mp3(self, addr: Tuple[str,int], mp3_bytes: bytes):
-        """分片发送大的 MP3 文件（带序号）"""
+        """分片发送大的 MP3 文件（旧版本，保持兼容）"""
         import struct
         chunk_size = 50000  # 50KB 每片
         total_chunks = (len(mp3_bytes) + chunk_size - 1) // chunk_size
