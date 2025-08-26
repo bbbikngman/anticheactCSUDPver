@@ -89,6 +89,9 @@ class AudioPlayQueue:
             self.max_playable_chunk_id = max_playable_chunk_id
             # 立即停止当前播放
             self.stop_current_playback()
+            # 短暂延迟后清除打断事件，为新音频播放做准备
+            import threading
+            threading.Timer(0.1, self.clear_interrupt).start()
 
     def stop_current_playback(self):
         """立即停止当前播放的音频"""
