@@ -260,7 +260,7 @@ class GUIClient:
         # WebSocket信令客户端（新增）
         self.interrupt_client = InterruptSignalClient(
             server_host=self.server[0],  # 使用UDP服务器的IP
-            server_port=31001            # WebSocket端口
+            server_port=31004            # WebSocket端口
         )
         self.interrupt_client.set_log_callback(self.log)
         self.interrupt_client.set_interrupt_callback(self._handle_interrupt_signal)

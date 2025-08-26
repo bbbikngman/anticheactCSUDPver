@@ -43,8 +43,8 @@ class SignalMessage:
 
 class InterruptSignalServer:
     """WebSocket信令服务器"""
-    
-    def __init__(self, host="0.0.0.0", port=31001):
+
+    def __init__(self, host="0.0.0.0", port=31004):
         self.host = host
         self.port = port
         self.clients: Dict[str, websockets.WebSocketServerProtocol] = {}  # {addr_str: websocket}
@@ -309,7 +309,7 @@ class InterruptSignalServer:
 class InterruptSignalClient:
     """WebSocket信令客户端"""
 
-    def __init__(self, server_host="127.0.0.1", server_port=31001):
+    def __init__(self, server_host="127.0.0.1", server_port=31004):
         self.server_url = f"ws://{server_host}:{server_port}"
         self.websocket = None
         self.running = False
