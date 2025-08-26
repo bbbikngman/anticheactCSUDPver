@@ -345,12 +345,10 @@ class UDPVoiceServer:
                         'last_interrupt_time': now
                     })
                     # 注意：不更新active_session，保持当前session继续对话
-                    # 重置chunk计数器，新对话从chunk=1开始
-                    self.client_chunk_counters[addr] = 0
+                    # 注意：不重置chunk计数器，让chunk编号继续递增
 
                 print(f"✅ 打断完成: session={current_session}, chunk={current_chunk}")
                 print(f"🛑 打断水位线: chunk={current_chunk}, 冷却到={now + self.INTERRUPT_COOLDOWN}")
-                print(f"🔄 重置chunk计数器，新对话从chunk=1开始")
 
                 return True
 
