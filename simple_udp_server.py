@@ -491,7 +491,7 @@ class UDPVoiceServer:
     def _send_large_mp3(self, addr: Tuple[str,int], mp3_bytes: bytes):
         """分片发送大的 MP3 文件（旧版本，保持兼容）"""
         import struct
-        chunk_size = 50000  # 50KB 每片
+        chunk_size = 1400  # 1.4KB 每片，与新方法统一
         total_chunks = (len(mp3_bytes) + chunk_size - 1) // chunk_size
 
         for i in range(total_chunks):
@@ -517,10 +517,10 @@ class UDPVoiceServer:
         """发送带session和chunk ID的MP3数据（支持自动分包）"""
         try:
             # UDP安全包大小限制（互联网环境MTU限制）
-            MAX_UDP_PAYLOAD = 1200  # 安全的互联网MTU大小
+            MAX_UDP_PAYLOAD = 1400  # 安全的互联网MTU大小
             # 协议头部大小：1+4+8+4+2+2 = 21字节
             HEADER_SIZE = 21
-            MAX_AUDIO_PER_PACKET = MAX_UDP_PAYLOAD - HEADER_SIZE  # 1179字节
+            MAX_AUDIO_PER_PACKET = MAX_UDP_PAYLOAD - HEADER_SIZE  # 1379字节
 
             # 检查是否需要分包
             if len(mp3_bytes) <= MAX_AUDIO_PER_PACKET:

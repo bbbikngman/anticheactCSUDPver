@@ -623,6 +623,11 @@ class GUIClient:
         try:
             compressed = self.codec.encode(block)
             pkt = ADPCMProtocol.pack_audio_packet(compressed, ADPCMProtocol.COMPRESSION_ADPCM)
+
+            # 调试：检查数据包大小
+            if len(pkt) > 1400:
+                self.log(f"⚠️ 上行数据包过大: {len(pkt)} 字节，可能被截断")
+
             self.sock.sendto(pkt, self.server)
 
             # 减少日志频率
