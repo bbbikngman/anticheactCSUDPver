@@ -78,8 +78,9 @@ class AudioPlayQueue:
 
     def should_play_chunk(self, chunk: AudioChunk) -> bool:
         """检查chunk是否应该播放（打断逻辑）"""
+        # 只播放当前session且chunk_id大于打断水位线的音频
         return (chunk.session_id == self.current_session and
-                chunk.chunk_id <= self.max_playable_chunk_id)
+                chunk.chunk_id > self.max_playable_chunk_id)
 
     def set_interrupt_watermark(self, session_id: str, max_playable_chunk_id: int):
         """设置打断水位线并立即停止当前播放"""
@@ -106,7 +107,7 @@ class AudioPlayQueue:
         """开始新的播放session"""
         self.log(f"🎵 开始新session: {session_id}")
         self.current_session = session_id
-        self.max_playable_chunk_id = float('inf')  # 新session默认无限制
+        self.max_playable_chunk_id = 0  # 新session从chunk=1开始播放
 
         # 启动播放线程（如果还没启动）
         if not self.playing:
