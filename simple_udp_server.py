@@ -85,6 +85,9 @@ class UDPVoiceServer:
         self.client_chunk_counters: Dict[Tuple[str,int], int] = {} # {addr: chunk_counter}
         self.client_interrupt_cooldown: Dict[Tuple[str,int], float] = {} # {addr: next_allowed_time}
 
+        # 分片重组缓存 (新增)
+        self.fragment_cache = {}  # {addr: {key: fragment_data}}
+
         # 线程安全锁 (新增)
         self.interrupt_lock = threading.Lock()  # 打断状态锁
         self.session_lock = threading.Lock()    # Session状态锁
@@ -403,6 +406,60 @@ class UDPVoiceServer:
         """获取客户端当前的chunk ID"""
         return self.client_chunk_counters.get(addr, 0)
 
+    # === 分片重组管理 (新增) ===
+    def _handle_fragmented_audio(self, addr: Tuple[str,int], session_id: str, chunk_id: int,
+                               fragment_index: int, total_fragments: int, fragment_data: bytes):
+        """处理分包音频数据的重组（服务器端）"""
+        key = (session_id, chunk_id)
+        now = time.time()
+
+        # 初始化客户端分片缓存
+        if addr not in self.fragment_cache:
+            self.fragment_cache[addr] = {}
+
+        # 清理超时的分包缓存（超过5秒）
+        expired_keys = []
+        for cache_key, cache_data in self.fragment_cache[addr].items():
+            if now - cache_data.get('timestamp', 0) > 5.0:
+                expired_keys.append(cache_key)
+
+        for expired_key in expired_keys:
+            del self.fragment_cache[addr][expired_key]
+            print(f"🗑️ 清理超时分包: {expired_key}")
+
+        # 初始化或获取分包数据
+        if key not in self.fragment_cache[addr]:
+            self.fragment_cache[addr][key] = {
+                'fragments': {},
+                'total_fragments': total_fragments,
+                'timestamp': now
+            }
+
+        # 存储分包数据
+        cache_data = self.fragment_cache[addr][key]
+        cache_data['fragments'][fragment_index] = fragment_data
+        cache_data['timestamp'] = now  # 更新时间戳
+
+        print(f"📥 收到分包: session={session_id}, chunk={chunk_id}, 分包={fragment_index+1}/{total_fragments}, 已收={len(cache_data['fragments'])}/{total_fragments}")
+
+        # 检查是否收齐所有分包
+        if len(cache_data['fragments']) == total_fragments:
+            # 按顺序重组数据
+            complete_data = b''
+            for i in range(total_fragments):
+                if i in cache_data['fragments']:
+                    complete_data += cache_data['fragments'][i]
+                else:
+                    print(f"❌ 分包 {i} 缺失，重组失败")
+                    return None
+
+            # 清理缓存
+            del self.fragment_cache[addr][key]
+            print(f"✅ 分包重组完成: session={session_id}, chunk={chunk_id}, 总大小={len(complete_data)}字节")
+            return complete_data
+
+        return None  # 还未收齐
+
     # === 打断冷却管理 (新增) ===
     def can_interrupt(self, addr: Tuple[str,int]) -> bool:
         """检查是否可以触发打断（2s冷却）"""
@@ -653,7 +710,31 @@ class UDPVoiceServer:
         while self.running:
             try:
                 pkt, addr = self.sock.recvfrom(MAX_UDP)
-                compression_type, payload = ADPCMProtocol.unpack_audio_packet(pkt)
+
+                # 尝试解析新格式（带session和chunk ID，支持分包）
+                try:
+                    t, session_id, chunk_id, fragment_index, total_fragments, payload = ADPCMProtocol.unpack_audio_with_session(pkt)
+                    if t == ADPCMProtocol.COMPRESSION_TTS_MP3:
+                        if total_fragments == 1:
+                            # 单包，直接处理
+                            print(f"📦 收到音频: session={session_id}, chunk={chunk_id}, 大小={len(payload)}字节")
+                            # 这里可以添加TTS音频处理逻辑
+                        else:
+                            # 分包，需要重组
+                            complete_data = self._handle_fragmented_audio(addr, session_id, chunk_id, fragment_index, total_fragments, payload)
+                            if complete_data:
+                                print(f"📦 分包重组完成: session={session_id}, chunk={chunk_id}, 大小={len(complete_data)}字节")
+                                # 这里可以添加重组后的TTS音频处理逻辑
+                        continue
+                    elif t == ADPCMProtocol.COMPRESSION_ADPCM:
+                        # 新格式的ADPCM数据，直接处理
+                        compression_type = t
+                    else:
+                        continue
+                except (ValueError, struct.error):
+                    # 新格式解析失败，尝试旧格式
+                    compression_type, payload = ADPCMProtocol.unpack_audio_packet(pkt)
+
                 if compression_type == ADPCMProtocol.COMPRESSION_ADPCM:
                     # 更新客户端活动时间
                     self.client_last_activity[addr] = time.time()
