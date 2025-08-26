@@ -338,30 +338,15 @@ class UDPVoiceServer:
                     print(f"⚠️ 打断信号发送失败，客户端 {addr} 将继续播放")
                     return False
 
-                # 生成新session
-                import uuid
-                new_session_id = str(uuid.uuid4())[:8]
-
-                # 原子化更新状态
+                # 原子化更新状态（不生成新session，继续使用当前session）
                 with self.session_lock:
                     self.client_states[addr].update({
-                        'active_session': new_session_id,
-                        'current_chunk': 0,
                         'interrupt_cooldown': now + self.INTERRUPT_COOLDOWN,
                         'last_interrupt_time': now
                     })
+                    # 注意：不更新active_session，保持当前session继续对话
 
-                    # 更新session映射
-                    self.client_sessions[addr] = new_session_id
-                    self.client_chunk_counters[addr] = 0
-
-                # 发送新session信号
-                success = self.interrupt_server.send_start_session_signal(addr, new_session_id)
-                if not success:
-                    print(f"⚠️ 新session信号发送失败，但打断已生效")
-                    # 打断已发送，即使新session信号失败也继续
-
-                print(f"✅ 打断完成: old_session={current_session} -> new_session={new_session_id}")
+                print(f"✅ 打断完成: session={current_session}, chunk={current_chunk}")
                 print(f"🛑 打断水位线: chunk={current_chunk}, 冷却到={now + self.INTERRUPT_COOLDOWN}")
 
                 return True
@@ -697,7 +682,7 @@ class UDPVoiceServer:
                                 interrupt_triggered = self._atomic_interrupt_check_and_trigger(addr, text)
 
                                 if interrupt_triggered:
-                                    print(f"🛑 已触发打断，使用新session继续对话")
+                                    print(f"🛑 已触发打断，继续当前session对话")
 
                                 print(f"开始 AI 对话生成...")
                                 kimi = self._get_client_ai(addr)
