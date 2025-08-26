@@ -278,7 +278,7 @@ class UDPVoiceServer:
             return
 
         # 查找是否有服务器地址的绑定需要更新
-        server_addr = (self.addr[0] if self.addr[0] != '0.0.0.0' else '192.168.31.216', self.addr[1])
+        server_addr = (self.addr[0] if self.addr[0] != '0.0.0.0' else '81.71.152.21', self.addr[1])
 
         if self.interrupt_server.bind_udp_address(server_addr):
             # 更新绑定到实际客户端地址
@@ -516,11 +516,11 @@ class UDPVoiceServer:
                               session_id: str, chunk_id: int):
         """发送带session和chunk ID的MP3数据（支持自动分包）"""
         try:
-            # UDP安全包大小限制（临时设为30KB，用于测试分包功能）
-            MAX_UDP_PAYLOAD = 30000
+            # UDP安全包大小限制（互联网环境MTU限制）
+            MAX_UDP_PAYLOAD = 1200  # 安全的互联网MTU大小
             # 协议头部大小：1+4+8+4+2+2 = 21字节
             HEADER_SIZE = 21
-            MAX_AUDIO_PER_PACKET = MAX_UDP_PAYLOAD - HEADER_SIZE  # 59979字节
+            MAX_AUDIO_PER_PACKET = MAX_UDP_PAYLOAD - HEADER_SIZE  # 1179字节
 
             # 检查是否需要分包
             if len(mp3_bytes) <= MAX_AUDIO_PER_PACKET:

@@ -211,7 +211,7 @@ def load_config(config_file="client_config.json"):
     except FileNotFoundError:
         print(f"配置文件 {config_file} 不存在，使用默认配置")
         return {
-            "server": {"ip": "192.168.31.216", "port": 31000},
+            "server": {"ip": "81.71.152.21", "port": 31000},
             "audio": {"sample_rate": 16000, "channels": 1, "chunk_size": 512},
             "network": {"max_udp_size": 65507, "timeout": 5.0},
             "ui": {"window_title": "反作弊语音客户端", "window_size": "600x500"},
@@ -357,6 +357,12 @@ class GUIClient:
                 pass
             except Exception as e:
                 self.log(f"client recv error: {e}")
+                self.log(f"🔍 数据包大小: {len(pkt) if 'pkt' in locals() else 'N/A'} 字节")
+                if 'pkt' in locals() and len(pkt) > 0:
+                    self.log(f"🔍 数据包前16字节: {pkt[:16].hex() if len(pkt) >= 16 else pkt.hex()}")
+                    self.log(f"🔍 数据包类型: {type(pkt)}")
+                import traceback
+                self.log(f"🔍 详细错误: {traceback.format_exc()}")
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 2.0)
 
