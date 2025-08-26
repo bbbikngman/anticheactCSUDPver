@@ -502,8 +502,11 @@ class UDPVoiceServer:
         session_id = self.get_current_session_id(addr)
         chunk_id = self.get_next_chunk_id(addr)
 
-        # 检查 UDP 包大小限制
-        max_payload = 60000  # 留一些余量给协议头
+        # 检查 UDP 包大小限制（与新协议保持一致）
+        MAX_UDP_PAYLOAD = 1400  # 安全的互联网MTU大小
+        HEADER_SIZE = 21  # 协议头部大小
+        max_payload = MAX_UDP_PAYLOAD - HEADER_SIZE  # 1379字节
+
         if len(mp3_bytes) > max_payload:
             print(f"⚠️ MP3 过大 ({len(mp3_bytes)} 字节)，分片发送...")
             self._send_large_mp3_with_session(addr, mp3_bytes, session_id, chunk_id)
