@@ -755,7 +755,7 @@ class UDPVoiceServer:
                         if len(float_block) == 0:
                             print(f"⚠️ ADPCM解码产生空块，payload大小: {len(payload)}")
                             continue
-                        elif len(float_block) < 512:
+                        elif len(float_block) < 400:  # 放宽限制，400采样以上都接受
                             print(f"⚠️ ADPCM解码块太短: {len(float_block)} 采样，payload大小: {len(payload)}")
                             continue
 
@@ -794,7 +794,7 @@ class UDPVoiceServer:
                         processed_any = True
 
                         # 检查音频块大小
-                        if len(float_block) < 512:  # 最小块大小检查
+                        if len(float_block) < 400:  # 放宽限制，400采样以上都接受
                             print(f"⚠️ 音频块太短: {len(float_block)} 采样，跳过处理")
                             continue
 
@@ -828,14 +828,22 @@ class UDPVoiceServer:
                                     print(f"🛑 已触发打断，继续当前session对话")
 
                                 print(f"开始 AI 对话生成...")
-                                kimi = self._get_client_ai(addr)
-                                resp_stream = kimi.get_response_stream(text)
-                                mp3_bytes = self.tts_udp.generate_mp3_from_stream(resp_stream)
-                                if mp3_bytes:
-                                    print(f"生成 MP3，大小: {len(mp3_bytes)} 字节，发送给 {addr}")
-                                    self._send_mp3_safe(addr, mp3_bytes)
-                                else:
-                                    print("TTS 生成失败，无 MP3 数据")
+                                try:
+                                    kimi = self._get_client_ai(addr)
+                                    print(f"🤖 获取AI实例成功")
+                                    resp_stream = kimi.get_response_stream(text)
+                                    print(f"🤖 AI响应流获取成功")
+                                    mp3_bytes = self.tts_udp.generate_mp3_from_stream(resp_stream)
+                                    print(f"🔊 TTS生成完成，大小: {len(mp3_bytes) if mp3_bytes else 0} 字节")
+                                    if mp3_bytes:
+                                        print(f"生成 MP3，大小: {len(mp3_bytes)} 字节，发送给 {addr}")
+                                        self._send_mp3_safe(addr, mp3_bytes)
+                                    else:
+                                        print("TTS 生成失败，无 MP3 数据")
+                                except Exception as e:
+                                    print(f"❌ AI对话生成失败: {e}")
+                                    import traceback
+                                    print(f"详细错误: {traceback.format_exc()}")
                     if not processed_any:
                         # 降低 CPU 占用
                         time.sleep(0.005)
