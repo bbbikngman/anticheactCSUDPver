@@ -19,7 +19,7 @@ import sounddevice as sd
 
 from adpcm_codec import ADPCMCodec, ADPCMProtocol
 
-SERVER_IP = "127.0.0.1"
+SERVER_IP = "192.168.31.216"
 SERVER_PORT = 31000
 MAX_UDP = 65507
 

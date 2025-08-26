@@ -272,21 +272,29 @@ class UDPVoiceServer:
 
     def _update_websocket_binding(self, actual_addr: Tuple[str,int]):
         """更新WebSocket地址绑定"""
+        print(f"🔍 [DEBUG] 更新WebSocket绑定，实际地址: {actual_addr}")
+        print(f"🔍 [DEBUG] 当前绑定: {list(self.interrupt_server.udp_bindings.keys())}")
+
         # 检查实际客户端地址是否已经绑定
         if self.interrupt_server.bind_udp_address(actual_addr):
             # 已经绑定了，不需要更新
+            print(f"🔍 [DEBUG] 实际地址已绑定，无需更新")
             return
 
         # 查找是否有服务器地址的绑定需要更新
-        server_addr = (self.addr[0] if self.addr[0] != '0.0.0.0' else '127.0.0.1', self.addr[1])
+        server_addr = (self.addr[0] if self.addr[0] != '0.0.0.0' else '192.168.31.216', self.addr[1])
+        print(f"🔍 [DEBUG] 检查服务器地址绑定: {server_addr}")
 
         if self.interrupt_server.bind_udp_address(server_addr):
             # 更新绑定到实际客户端地址
+            print(f"🔍 [DEBUG] 找到服务器地址绑定，尝试更新...")
             success = self.interrupt_server.update_udp_binding(server_addr, actual_addr)
             if success:
                 print(f"🔄 WebSocket绑定已更新: {server_addr} -> {actual_addr}")
             else:
                 print(f"⚠️ WebSocket绑定更新失败: {server_addr} -> {actual_addr}")
+        else:
+            print(f"🔍 [DEBUG] 未找到服务器地址绑定，WebSocket可能还没连接")
         # 如果都没找到，说明WebSocket还没连接，这是正常的
 
     def _atomic_interrupt_check_and_trigger(self, addr: Tuple[str,int], transcription: str) -> bool:
@@ -327,6 +335,8 @@ class UDPVoiceServer:
             if not self.interrupt_server.bind_udp_address(addr):
                 print(f"⚠️ WebSocket未连接，跳过打断: {addr}")
                 print(f"🔍 当前WebSocket绑定: {list(self.interrupt_server.udp_bindings.keys())}")
+                print(f"🔍 查找的地址: {addr}")
+                print(f"🔍 地址类型: {type(addr)}")
                 return False
 
             # 3. 原子化执行打断

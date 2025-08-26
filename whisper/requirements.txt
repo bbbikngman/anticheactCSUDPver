@@ -1,31 +1,35 @@
-# 反诈AI电话专员 - 依赖包列表
-
-# 核心音频处理
-sounddevice>=0.4.6
-soundfile>=0.12.0
-numpy>=1.21.0
-
-# 语音识别 (Whisper)
+# 核心AI与语音处理
+# Core AI and Speech Processing
 faster-whisper>=1.0.0
 torch>=2.0.0
 torchaudio>=2.0.0
-onnxruntime>=1.15.0
+onnxruntime>=1.15.0  # faster-whisper 的依赖
+pydub>=0.25.0       # 用于音频格式操作
 
-# TTS语音合成
+# TTS语音合成 (Text-to-Speech)
 edge-tts>=6.1.0
-pyttsx3>=2.90
+# pyttsx3>=2.90     # 如果你的项目不再使用 pyttsx3，可以删除此行
 
-# 音频播放
-pygame>=2.5.0
-pyinstaller>=6.6.0
-pillow>=10.0.0
+# 音频IO与播放 (Audio Input/Output and Playback)
+sounddevice>=0.4.6   # 录音
+soundfile>=0.12.0    # 读写音频文件 (sounddevice的依赖)
+pygame>=2.5.0        # 音频播放
 
-# AI对话
-openai>=1.0.0
-python-dotenv>=1.0.0
+# 网络通信 (Networking)
+websockets>=12.0     # WebSocket 信令通道
 
-# 工具库
+# AI对话 (LLM)
+openai>=1.0.0        # Kimi 等大模型的 API 客户端
+python-dotenv>=1.0.0 # 管理 .env 文件中的 API Key
+
+# 数据处理与工具库 (Data Processing & Utilities)
+numpy>=1.21.0
 requests>=2.28.0
 httpx>=0.24.0
 
-sounddevice
+# ---------------------------------------------------
+# 构建工具 (Build Tools) - 这些是用于打包EXE的，服务器运行时不需要
+# 建议放在一个单独的 requirements-dev.txt 文件中
+# pyinstaller>=6.6.0
+# pillow>=10.0.0
+# ---------------------------------------------------

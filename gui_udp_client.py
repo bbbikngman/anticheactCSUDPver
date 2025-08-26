@@ -207,7 +207,7 @@ def load_config(config_file="client_config.json"):
     except FileNotFoundError:
         print(f"配置文件 {config_file} 不存在，使用默认配置")
         return {
-            "server": {"ip": "127.0.0.1", "port": 31000},
+            "server": {"ip": "192.168.31.216", "port": 31000},
             "audio": {"sample_rate": 16000, "channels": 1, "chunk_size": 512},
             "network": {"max_udp_size": 65507, "timeout": 5.0},
             "ui": {"window_title": "反作弊语音客户端", "window_size": "600x500"},
@@ -260,7 +260,7 @@ class GUIClient:
         # WebSocket信令客户端（新增）
         self.interrupt_client = InterruptSignalClient(
             server_host=self.server[0],  # 使用UDP服务器的IP
-            server_port=31004            # WebSocket端口
+            server_port=31001            # WebSocket端口
         )
         self.interrupt_client.set_log_callback(self.log)
         self.interrupt_client.set_interrupt_callback(self._handle_interrupt_signal)

@@ -16,7 +16,7 @@ MAX_SPEECH_S = float(os.getenv("MAX_SPEECH_S", 15.0))
 
 # --- Whisper Transcription Configuration ---
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "base")
-DEVICE = os.getenv("DEVICE", "cuda")
+DEVICE = os.getenv("DEVICE", "cpu")
 MAX_WORDS_TRIGGER = int(os.getenv("MAX_WORDS_TRIGGER", 999))
 LANGUAGE_CODE = os.getenv("LANGUAGE_CODE", "zh")
 

@@ -58,7 +58,7 @@ def main():
     print("🔍 检查并安装依赖...")
     ensure_all_packages()
 
-    print("\n🚀 启动服务: http://127.0.0.1:%d" % args.port)
+   
     # 使用子进程启动 uvicorn（支持 --reload）
     cmd = [
         sys.executable, "-m", "uvicorn",
