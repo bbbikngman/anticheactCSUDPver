@@ -209,7 +209,7 @@ def load_config(config_file="client_config.json"):
         with open(config_file, 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"配置文件 {config_file} 不存在，使用默认配置")
+        # 在GUI模式下不输出到控制台，只返回默认配置
         return {
             "server": {"ip": "81.71.152.21", "port": 31000},
             "audio": {"sample_rate": 16000, "channels": 1, "chunk_size": 512},
@@ -218,16 +218,28 @@ def load_config(config_file="client_config.json"):
             "logging": {"level": "INFO", "file": "logs/client.log", "console": True}
         }
     except json.JSONDecodeError as e:
-        print(f"配置文件格式错误: {e}")
-        return load_config()  # 返回默认配置
+        # 在GUI模式下不输出到控制台，返回默认配置
+        return {
+            "server": {"ip": "81.71.152.21", "port": 31000},
+            "audio": {"sample_rate": 16000, "channels": 1, "chunk_size": 512, "device_id": None},
+            "network": {"max_udp_size": 65507, "timeout": 5.0},
+            "ui": {"window_title": "反作弊语音客户端", "window_size": "600x500", "log_lines": 20},
+            "logging": {"level": "INFO", "file": "logs/client.log", "console": True}
+        }
 
 # 加载配置
 CONFIG = load_config()
 
 class GUIClient:
-    def __init__(self, config=None):
+    def __init__(self, config=None, gui_mode=True):
         if config is None:
             config = CONFIG
+
+        # 设置GUI模式标识
+        self.gui_mode = gui_mode
+
+        # 初始化日志队列（必须在其他初始化之前）
+        self.log_queue = queue.Queue()
 
         # 服务器配置
         self.server = (config["server"]["ip"], config["server"]["port"])
@@ -237,15 +249,15 @@ class GUIClient:
         self.udp_connected = False
         try:
             # 方法1：使用connect建立UDP"连接"，固定源端口
-            print(f"🔌 尝试连接到服务器: {self.server}")
+            self.log(f"🔌 尝试连接到服务器: {self.server}")
             self.sock.connect(self.server)
             # 获取实际绑定的本地端口
             local_addr = self.sock.getsockname()
             self.udp_connected = True
-            print(f"✅ UDP客户端成功绑定到固定端口: {local_addr}")
+            self.log(f"✅ UDP客户端成功绑定到固定端口: {local_addr}")
         except Exception as e:
-            print(f"❌ UDP端口绑定失败: {e}")
-            print(f"⚠️ 将使用传统sendto方式，可能导致端口变化")
+            self.log(f"❌ UDP端口绑定失败: {e}")
+            self.log(f"⚠️ 将使用传统sendto方式，可能导致端口变化")
             self.udp_connected = False
 
         # 音频配置
@@ -264,7 +276,6 @@ class GUIClient:
         self.codec = ADPCMCodec()
         self.running = False
         self.stream = None
-        self.log_queue = queue.Queue()
         # 简单聚合器：短时间内到达的多个MP3片段合并后再播，避免乱序
         self._agg_chunks = []
         self._agg_last_time = 0.0
@@ -300,7 +311,15 @@ class GUIClient:
         self.recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
 
     def log(self, msg: str):
-        print(msg)
+        # 在GUI模式下，只输出到GUI日志，不输出到控制台
+        # 在控制台模式下，同时输出到控制台和GUI
+        if hasattr(self, 'gui_mode') and self.gui_mode:
+            # 纯GUI模式，不输出到控制台
+            pass
+        else:
+            # 控制台模式或调试模式
+            print(msg)
+
         logging.info(msg)
         self.log_queue.put(msg)
 

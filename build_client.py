@@ -27,7 +27,7 @@ def build_client():
     cmd = [
         "pyinstaller",
         "--onedir",                     # 打包为目录（避免tkinter问题）
-        "--console",                    # 保留控制台窗口以便调试
+        "--windowed",                   # 无控制台窗口，纯GUI模式
         "--name=VoiceClient",           # EXE文件名
         "--add-data=client_config.json;.",  # 包含配置文件
         "--hidden-import=numpy",        # 确保numpy被包含
