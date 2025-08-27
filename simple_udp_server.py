@@ -117,6 +117,10 @@ class UDPVoiceServer:
         # WebSocket地址映射 (新增)
         self.websocket_address_map = {}  # {server_addr: actual_client_addr}
 
+        # 端口变化管理 (新增)
+        self.client_ip_to_current_addr = {}  # {ip: current_addr} - 跟踪每个IP的当前地址
+        self.client_welcomed_ips = set()  # 使用IP而不是addr作为welcomed标识
+
         # WebSocket信令服务器 (新增)
         self.interrupt_server = InterruptSignalServer(host="0.0.0.0", port=31004)
         self.interrupt_server.set_log_callback(self._log_websocket)
@@ -272,6 +276,88 @@ class UDPVoiceServer:
             self.client_states[addr]['interrupt_cooldown'] = cooldown_time
 
         print(f"⏰ 设置{cooldown_type}冷却: {cooldown_time - now:.1f}秒")
+
+    def _handle_client_address_change(self, new_addr: Tuple[str,int]) -> Tuple[str,int]:
+        """处理客户端地址变化，返回应该使用的地址（可能是迁移后的地址）"""
+        ip, port = new_addr
+
+        # 检查是否是已知IP的新端口
+        if ip in self.client_ip_to_current_addr:
+            old_addr = self.client_ip_to_current_addr[ip]
+            if old_addr != new_addr:
+                print(f"🔄 检测到客户端端口变化: {old_addr} -> {new_addr}")
+                self._migrate_client_state(old_addr, new_addr)
+                self.client_ip_to_current_addr[ip] = new_addr
+                return new_addr
+        else:
+            # 新IP，记录当前地址
+            self.client_ip_to_current_addr[ip] = new_addr
+
+        return new_addr
+
+    def _migrate_client_state(self, old_addr: Tuple[str,int], new_addr: Tuple[str,int]):
+        """将客户端状态从旧地址迁移到新地址"""
+        start_time = time.time()
+        print(f"🚚 快速迁移客户端状态: {old_addr} -> {new_addr}")
+
+        # 使用锁保护状态迁移过程，但减少日志输出以提高速度
+        with self.session_lock:
+            migrated_items = []
+
+            # 批量迁移所有客户端状态
+            if old_addr in self.client_codecs:
+                self.client_codecs[new_addr] = self.client_codecs.pop(old_addr)
+                migrated_items.append("编解码器")
+
+            if old_addr in self.client_queues:
+                self.client_queues[new_addr] = self.client_queues.pop(old_addr)
+                migrated_items.append("音频队列")
+
+            if old_addr in self.client_handlers:
+                self.client_handlers[new_addr] = self.client_handlers.pop(old_addr)
+                migrated_items.append("音频处理器")
+
+            if old_addr in self.client_ai:
+                self.client_ai[new_addr] = self.client_ai.pop(old_addr)
+                migrated_items.append("AI历史")
+
+            if old_addr in self.client_last_activity:
+                self.client_last_activity[new_addr] = self.client_last_activity.pop(old_addr)
+                migrated_items.append("活动时间")
+
+            session_id = ""
+            chunk_count = 0
+            if old_addr in self.client_sessions:
+                session_id = self.client_sessions.pop(old_addr)
+                self.client_sessions[new_addr] = session_id
+                migrated_items.append("session")
+
+            if old_addr in self.client_chunk_counters:
+                chunk_count = self.client_chunk_counters.pop(old_addr)
+                self.client_chunk_counters[new_addr] = chunk_count
+                migrated_items.append("chunk计数器")
+
+            if old_addr in self.client_interrupt_cooldown:
+                self.client_interrupt_cooldown[new_addr] = self.client_interrupt_cooldown.pop(old_addr)
+                migrated_items.append("打断冷却")
+
+            if old_addr in self.client_states:
+                old_state = self.client_states.pop(old_addr)
+                self.client_states[new_addr] = old_state
+                migrated_items.append("统一状态")
+
+            # 单行汇总日志，减少输出延迟
+            elapsed = time.time() - start_time
+            print(f"  ✅ 迁移完成 ({elapsed:.3f}s): {', '.join(migrated_items)} | session={session_id}, chunk={chunk_count}")
+
+        if old_addr in self.fragment_cache:
+            self.fragment_cache[new_addr] = self.fragment_cache.pop(old_addr)
+
+        # 更新WebSocket绑定
+        if self.interrupt_server.bind_udp_address(old_addr):
+            success = self.interrupt_server.update_udp_binding(old_addr, new_addr)
+            if success:
+                print(f"🔄 WebSocket绑定已更新: {old_addr} -> {new_addr}")
 
     def _update_websocket_binding(self, actual_addr: Tuple[str,int]):
         """更新WebSocket地址绑定"""
@@ -664,6 +750,9 @@ class UDPVoiceServer:
 
         # 重置开场白标记，下次连接会重新发送
         self.client_welcomed.discard(addr)
+        # 同时重置IP级别的welcomed标记
+        client_ip = addr[0]
+        self.client_welcomed_ips.discard(client_ip)
 
         print(f"✅ 客户端 {addr} 会话完全重置")
 
@@ -686,6 +775,12 @@ class UDPVoiceServer:
             self.client_handlers.pop(addr, None)
             self.client_ai.pop(addr, None)
             self.client_welcomed.discard(addr)
+            # 同时清理IP级别的welcomed标记
+            client_ip = addr[0]
+            self.client_welcomed_ips.discard(client_ip)
+            # 清理IP到地址的映射
+            if client_ip in self.client_ip_to_current_addr:
+                del self.client_ip_to_current_addr[client_ip]
 
     def _recv_loop(self):
         while self.running:
@@ -717,15 +812,19 @@ class UDPVoiceServer:
                     compression_type, payload = ADPCMProtocol.unpack_audio_packet(pkt)
 
                 if compression_type == ADPCMProtocol.COMPRESSION_ADPCM:
+                    # 处理地址变化（端口可能变化）
+                    addr = self._handle_client_address_change(addr)
+
                     # 更新客户端活动时间
                     self.client_last_activity[addr] = time.time()
 
                     # 更新WebSocket地址绑定
                     self._update_websocket_binding(addr)
 
-                    # 新客户端首次连接，立即发送开场白
-                    if addr not in self.client_welcomed:
-                        self.client_welcomed.add(addr)
+                    # 使用IP作为客户端标识，检查是否需要发送开场白
+                    client_ip = addr[0]
+                    if client_ip not in self.client_welcomed_ips:
+                        self.client_welcomed_ips.add(client_ip)
                         self._send_opening_statement(addr)
 
                     codec = self._get_client_codec(addr)
@@ -752,9 +851,13 @@ class UDPVoiceServer:
                 elif compression_type == ADPCMProtocol.CONTROL_RESET:
                     self.reset_client_session(addr)
                 elif compression_type == ADPCMProtocol.CONTROL_HELLO:
-                    # 客户端连接信号，发送开场白
-                    if addr not in self.client_welcomed:
-                        self.client_welcomed.add(addr)
+                    # 处理地址变化（端口可能变化）
+                    addr = self._handle_client_address_change(addr)
+
+                    # 使用IP作为客户端标识，检查是否需要发送开场白
+                    client_ip = addr[0]
+                    if client_ip not in self.client_welcomed_ips:
+                        self.client_welcomed_ips.add(client_ip)
                         self._send_opening_statement(addr)
                 else:
                     # 其他类型暂不处理
