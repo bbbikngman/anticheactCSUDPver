@@ -23,14 +23,28 @@ def build_client():
         print("❌ PyInstaller未安装，正在安装...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
     
+    # 检查是否存在图标文件
+    icon_param = []
+    if os.path.exists("icon.ico"):
+        icon_param = ["--icon=icon.ico"]
+        print("✅ 找到图标文件: icon.ico")
+    else:
+        print("⚠️ 未找到图标文件，跳过图标设置")
+
+    # 检查是否存在配置文件
+    config_param = []
+    if os.path.exists("client_config.json"):
+        config_param = ["--add-data=client_config.json;."]
+        print("✅ 找到配置文件: client_config.json")
+    else:
+        print("⚠️ 未找到配置文件，跳过配置文件包含")
+
     # 打包命令
     cmd = [
         "pyinstaller",
         "--onefile",                    # 打包为单个EXE文件
         "--windowed",                   # 无控制台窗口
         "--name=VoiceClient",           # EXE文件名
-        "--icon=icon.ico",              # 图标文件（如果存在）
-        "--add-data=client_config.json;.",  # 包含配置文件
         "--hidden-import=numpy",        # 确保numpy被包含
         "--hidden-import=sounddevice",  # 确保sounddevice被包含
         "--hidden-import=pygame",       # 确保pygame被包含
@@ -38,7 +52,7 @@ def build_client():
         "--collect-all=sounddevice",    # 收集sounddevice的所有依赖
         "--collect-all=pygame",         # 收集pygame的所有依赖
         "gui_udp_client.py"            # 主程序文件
-    ]
+    ] + icon_param + config_param
     
     print(f"🔨 执行打包命令: {' '.join(cmd)}")
     

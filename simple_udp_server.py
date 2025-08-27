@@ -723,10 +723,14 @@ class UDPVoiceServer:
                     # 更新WebSocket地址绑定
                     self._update_websocket_binding(addr)
 
-                    # 新客户端首次连接，立即发送开场白
-                    if addr not in self.client_welcomed:
-                        self.client_welcomed.add(addr)
+                    # 新客户端首次连接，立即发送开场白（基于IP判断，不考虑端口）
+                    client_ip = addr[0]  # 只取IP部分
+                    if client_ip not in self.client_welcomed:
+                        self.client_welcomed.add(client_ip)
+                        print(f"🎉 新客户端IP首次连接: {client_ip}")
                         self._send_opening_statement(addr)
+                    else:
+                        print(f"🔄 已知客户端重连: {addr} (IP: {client_ip})")
 
                     codec = self._get_client_codec(addr)
                     try:
@@ -832,7 +836,7 @@ class UDPVoiceServer:
                                         print(f"生成 MP3，大小: {len(mp3_bytes)} 字节，发送给 {addr}")
                                         self._send_mp3_safe(addr, mp3_bytes)
                                     else:
-                                        print("TTS 生成失败，无 MP3 数据")
+                                        print("⚠️ TTS 生成失败，可能是服务暂时不可用，跳过本次回复")
                                 except Exception as e:
                                     print(f"❌ AI对话生成失败: {e}")
                                     import traceback
@@ -859,6 +863,7 @@ if __name__ == "__main__":
         print("管理命令:")
         print("  输入 'clients' 查看活跃客户端")
         print("  输入 'reset <ip>:<port>' 重置指定客户端")
+        print("  输入 'welcome <ip>' 重置指定IP的欢迎状态")
         print("  输入 'cleanup' 手动清理超时客户端")
 
         while True:
@@ -881,6 +886,16 @@ if __name__ == "__main__":
                             server.reset_client_session(addr)
                         except:
                             print("格式错误，请使用: reset <ip>:<port>")
+                    elif cmd.startswith('welcome '):
+                        try:
+                            ip = cmd[8:]  # 去掉 'welcome '
+                            if ip in server.client_welcomed:
+                                server.client_welcomed.remove(ip)
+                                print(f"✅ 已重置IP {ip} 的欢迎状态，下次连接将重新发送开场白")
+                            else:
+                                print(f"⚠️ IP {ip} 未在欢迎列表中")
+                        except:
+                            print("格式错误，请使用: welcome <ip>")
                     elif cmd == 'cleanup':
                         server.cleanup_inactive_clients()
                 else:

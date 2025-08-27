@@ -16,13 +16,32 @@ class TTSModuleUDPAdapter:
 
     async def _edge_tts_bytes_async(self, text: str) -> bytes:
         import edge_tts
+        import asyncio
+
         voice = config.TTS_VOICE_ZH if config.LANGUAGE_CODE == "zh" else config.TTS_VOICE_EN
-        communicate = edge_tts.Communicate(text, voice, rate=config.TTS_RATE, volume=config.TTS_VOLUME)
-        out = b""
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                out += chunk["data"]
-        return out
+
+        # 重试机制：最多重试3次
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                communicate = edge_tts.Communicate(text, voice, rate=config.TTS_RATE, volume=config.TTS_VOLUME)
+                out = b""
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        out += chunk["data"]
+                return out
+
+            except Exception as e:
+                print(f"⚠️ TTS尝试 {attempt + 1}/{max_retries} 失败: {e}")
+                if attempt < max_retries - 1:
+                    # 等待后重试，递增等待时间
+                    wait_time = (attempt + 1) * 2  # 2秒, 4秒, 6秒
+                    print(f"⏰ 等待 {wait_time} 秒后重试...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    print(f"❌ TTS重试 {max_retries} 次后仍失败，返回空数据")
+                    # 返回空数据而不是抛出异常，避免程序崩溃
+                    return b""
 
     def _split_sentences(self, text: str):
         """粗略按句切分，尽量让单句生成的MP3 < 60KB（UDP单包可发）"""
