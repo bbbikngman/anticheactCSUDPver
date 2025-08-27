@@ -45,6 +45,10 @@ def build_client():
         "--onefile",                    # 打包为单个EXE文件
         "--windowed",                   # 无控制台窗口
         "--name=VoiceClient",           # EXE文件名
+        "--exclude-module=tkinter",     # 排除tkinter
+        "--exclude-module=_tkinter",    # 排除_tkinter
+        "--exclude-module=tcl",         # 排除tcl
+        "--exclude-module=tk",          # 排除tk
         "--hidden-import=numpy",        # 确保numpy被包含
         "--hidden-import=sounddevice",  # 确保sounddevice被包含
         "--hidden-import=pygame",       # 确保pygame被包含

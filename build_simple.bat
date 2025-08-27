@@ -4,8 +4,8 @@ echo 🚀 开始打包客户端...
 REM 安装PyInstaller（如果未安装）
 pip install pyinstaller
 
-REM 打包客户端（不包含图标）
-pyinstaller --onefile --windowed --name=VoiceClient gui_udp_client.py
+REM 打包客户端（排除tkinter依赖）
+pyinstaller --onefile --windowed --name=VoiceClient --exclude-module=tkinter --exclude-module=_tkinter --exclude-module=tcl --exclude-module=tk gui_udp_client.py
 
 REM 复制配置文件
 copy client_config.json dist\

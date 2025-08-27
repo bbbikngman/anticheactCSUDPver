@@ -20,7 +20,14 @@ from dataclasses import dataclass
 
 import numpy as np
 import sounddevice as sd
-from tkinter import Tk, Button, Text, END, DISABLED, NORMAL, PhotoImage
+
+# 尝试导入tkinter，如果失败则使用控制台模式
+try:
+    from tkinter import Tk, Button, Text, END, DISABLED, NORMAL, PhotoImage
+    TKINTER_AVAILABLE = True
+except ImportError:
+    TKINTER_AVAILABLE = False
+    print("⚠️ tkinter不可用，将使用控制台模式")
 
 from adpcm_codec import ADPCMCodec, ADPCMProtocol
 from websocket_signal import InterruptSignalClient
@@ -694,8 +701,47 @@ class GUIClient:
             pass
 
 
+def run_console(app):
+    """控制台模式运行"""
+    print("🎙️ 语音客户端启动中...")
+    print("=" * 50)
+    print(f"📡 服务器地址: {app.server[0]}:{app.server[1]}")
+    print("=" * 50)
+
+    try:
+        app.start_stream()
+
+        print("\n控制命令:")
+        print("  输入 'quit' 或 'exit' 退出")
+        print("  输入 'reset' 重置会话")
+        print("  按 Ctrl+C 强制退出")
+        print("=" * 50)
+
+        while True:
+            try:
+                cmd = input().strip().lower()
+                if cmd in ['quit', 'exit', 'q']:
+                    break
+                elif cmd == 'reset':
+                    app.reset_session()
+                elif cmd == 'help':
+                    print("可用命令: quit, exit, reset, help")
+            except KeyboardInterrupt:
+                break
+            except EOFError:
+                break
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("\n👋 客户端已退出")
+
 def run_gui():
     app = GUIClient()
+
+    if not TKINTER_AVAILABLE:
+        # 控制台模式
+        return run_console(app)
 
     root = Tk()
     root.title(app.window_title)

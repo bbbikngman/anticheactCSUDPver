@@ -78,7 +78,8 @@ class UDPVoiceServer:
 
         # 会话管理
         self.client_last_activity = {}
-        self.client_welcomed = set()
+        self.client_welcomed = set()  # 存储已欢迎的IP
+        self.client_welcome_time = {}  # 存储欢迎时间，防止重复欢迎
 
         # Session和Chunk管理 (新增)
         self.client_sessions: Dict[Tuple[str,int], str] = {}      # {addr: current_session_id}
@@ -725,12 +726,24 @@ class UDPVoiceServer:
 
                     # 新客户端首次连接，立即发送开场白（基于IP判断，不考虑端口）
                     client_ip = addr[0]  # 只取IP部分
+                    now = time.time()
+
                     if client_ip not in self.client_welcomed:
                         self.client_welcomed.add(client_ip)
+                        self.client_welcome_time[client_ip] = now
                         print(f"🎉 新客户端IP首次连接: {client_ip}")
                         self._send_opening_statement(addr)
                     else:
-                        print(f"🔄 已知客户端重连: {addr} (IP: {client_ip})")
+                        # 检查是否需要重新发送欢迎语（超过5分钟）
+                        last_welcome = self.client_welcome_time.get(client_ip, 0)
+                        if now - last_welcome > 300:  # 5分钟
+                            self.client_welcome_time[client_ip] = now
+                            print(f"🔄 客户端长时间重连，重新发送欢迎语: {client_ip}")
+                            self._send_opening_statement(addr)
+                        else:
+                            # 只在新端口时记录重连，避免刷屏
+                            if addr not in self.client_last_activity or now - self.client_last_activity[addr] > 10:
+                                print(f"🔄 客户端重连: {addr} (IP: {client_ip})")
 
                     codec = self._get_client_codec(addr)
                     try:
@@ -891,6 +904,8 @@ if __name__ == "__main__":
                             ip = cmd[8:]  # 去掉 'welcome '
                             if ip in server.client_welcomed:
                                 server.client_welcomed.remove(ip)
+                                if ip in server.client_welcome_time:
+                                    del server.client_welcome_time[ip]
                                 print(f"✅ 已重置IP {ip} 的欢迎状态，下次连接将重新发送开场白")
                             else:
                                 print(f"⚠️ IP {ip} 未在欢迎列表中")
