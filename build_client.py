@@ -23,10 +23,10 @@ def build_client():
         print("❌ PyInstaller未安装，正在安装...")
         subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
     
-    # 打包命令
+    # 打包命令 - 使用onedir模式避免tkinter问题
     cmd = [
         "pyinstaller",
-        "--onefile",                    # 打包为单个EXE文件
+        "--onedir",                     # 打包为目录（避免tkinter问题）
         "--console",                    # 保留控制台窗口以便调试
         "--name=VoiceClient",           # EXE文件名
         "--add-data=client_config.json;.",  # 包含配置文件
@@ -37,6 +37,7 @@ def build_client():
         "--hidden-import=pygame",       # 确保pygame被包含
         "--hidden-import=websockets",   # 确保websockets被包含
         "--hidden-import=tkinter",      # 确保tkinter被包含
+        "--hidden-import=tkinter.ttk",  # tkinter主题
         "--hidden-import=audioop",      # 音频操作模块
         "--hidden-import=threading",    # 线程模块
         "--hidden-import=json",         # JSON模块
@@ -60,27 +61,30 @@ def build_client():
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         print("✅ 打包成功！")
         
-        # 检查输出文件
-        exe_path = os.path.join("dist", "VoiceClient.exe")
+        # 检查输出文件（onedir模式）
+        exe_path = os.path.join("dist", "VoiceClient", "VoiceClient.exe")
+        dist_dir = os.path.join("dist", "VoiceClient")
+
         if os.path.exists(exe_path):
             size_mb = os.path.getsize(exe_path) / (1024 * 1024)
             print(f"📦 EXE文件: {exe_path}")
             print(f"📏 文件大小: {size_mb:.1f} MB")
-            
+
             # 复制配置文件到dist目录
             config_src = "client_config.json"
-            config_dst = os.path.join("dist", "client_config.json")
+            config_dst = os.path.join(dist_dir, "client_config.json")
             if os.path.exists(config_src):
                 shutil.copy2(config_src, config_dst)
                 print(f"📋 配置文件已复制: {config_dst}")
-            
+
             print("\n🎉 打包完成！")
             print(f"📁 可执行文件位置: {os.path.abspath(exe_path)}")
+            print(f"📁 完整应用目录: {os.path.abspath(dist_dir)}")
             print("💡 使用说明:")
-            print("   1. 将VoiceClient.exe和client_config.json放在同一目录")
+            print("   1. 进入dist/VoiceClient目录")
             print("   2. 双击VoiceClient.exe启动客户端")
             print("   3. 确保服务器地址配置正确")
-            
+
         else:
             print("❌ 未找到生成的EXE文件")
             
