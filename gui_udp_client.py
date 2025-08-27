@@ -233,6 +233,18 @@ class GUIClient:
         self.server = (config["server"]["ip"], config["server"]["port"])
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
+        # 绑定到固定源端口，避免Windows动态分配端口导致频繁变化
+        try:
+            # 方法1：使用connect建立UDP"连接"，固定源端口
+            self.sock.connect(self.server)
+            # 获取实际绑定的本地端口
+            local_addr = self.sock.getsockname()
+            print(f"🔌 UDP客户端绑定到固定端口: {local_addr}")
+        except Exception as e:
+            print(f"⚠️ UDP端口绑定失败: {e}")
+            # 回退到传统方式
+            pass
+
         # 音频配置
         self.sample_rate = config["audio"]["sample_rate"]
         self.channels = config["audio"]["channels"]
@@ -628,7 +640,12 @@ class GUIClient:
             if len(pkt) > 1400:
                 self.log(f"⚠️ 上行数据包过大: {len(pkt)} 字节，可能被截断")
 
-            self.sock.sendto(pkt, self.server)
+            # 使用send()而不是sendto()，因为socket已经connect到服务器
+            try:
+                self.sock.send(pkt)
+            except OSError:
+                # 如果connect失败，回退到sendto方式
+                self.sock.sendto(pkt, self.server)
 
             # 减少日志频率
             if hasattr(self, '_send_count'):
@@ -649,7 +666,11 @@ class GUIClient:
         try:
             # 发送连接信号，触发服务器发送开场白
             hello_pkt = ADPCMProtocol.pack_control(ADPCMProtocol.CONTROL_HELLO)
-            self.sock.sendto(hello_pkt, self.server)
+            try:
+                self.sock.send(hello_pkt)
+            except OSError:
+                # 如果connect失败，回退到sendto方式
+                self.sock.sendto(hello_pkt, self.server)
 
             self.stream = sd.InputStream(
                 dtype='float32',
@@ -669,7 +690,11 @@ class GUIClient:
     def reset_session(self):
         try:
             pkt = ADPCMProtocol.pack_control(ADPCMProtocol.CONTROL_RESET)
-            self.sock.sendto(pkt, self.server)
+            try:
+                self.sock.send(pkt)
+            except OSError:
+                # 如果connect失败，回退到sendto方式
+                self.sock.sendto(pkt, self.server)
             # 客户端本地也清一下编码状态，视觉上更干净
             self.codec.reset_all()
             self.log("🧹 已请求服务器重置会话（提示词级）")
