@@ -297,51 +297,58 @@ class UDPVoiceServer:
 
     def _migrate_client_state(self, old_addr: Tuple[str,int], new_addr: Tuple[str,int]):
         """将客户端状态从旧地址迁移到新地址"""
-        print(f"🚚 迁移客户端状态: {old_addr} -> {new_addr}")
+        start_time = time.time()
+        print(f"🚚 快速迁移客户端状态: {old_addr} -> {new_addr}")
 
-        # 使用锁保护状态迁移过程
+        # 使用锁保护状态迁移过程，但减少日志输出以提高速度
         with self.session_lock:
-            # 迁移所有客户端状态
+            migrated_items = []
+
+            # 批量迁移所有客户端状态
             if old_addr in self.client_codecs:
                 self.client_codecs[new_addr] = self.client_codecs.pop(old_addr)
-                print(f"  ✅ 迁移编解码器状态")
+                migrated_items.append("编解码器")
 
             if old_addr in self.client_queues:
                 self.client_queues[new_addr] = self.client_queues.pop(old_addr)
-                print(f"  ✅ 迁移音频队列")
+                migrated_items.append("音频队列")
 
             if old_addr in self.client_handlers:
                 self.client_handlers[new_addr] = self.client_handlers.pop(old_addr)
-                print(f"  ✅ 迁移音频处理器")
+                migrated_items.append("音频处理器")
 
             if old_addr in self.client_ai:
                 self.client_ai[new_addr] = self.client_ai.pop(old_addr)
-                print(f"  ✅ 迁移AI对话历史")
+                migrated_items.append("AI历史")
 
             if old_addr in self.client_last_activity:
                 self.client_last_activity[new_addr] = self.client_last_activity.pop(old_addr)
-                print(f"  ✅ 迁移活动时间")
+                migrated_items.append("活动时间")
 
+            session_id = ""
+            chunk_count = 0
             if old_addr in self.client_sessions:
-                old_session = self.client_sessions.pop(old_addr)
-                self.client_sessions[new_addr] = old_session
-                print(f"  ✅ 迁移session: {old_session}")
+                session_id = self.client_sessions.pop(old_addr)
+                self.client_sessions[new_addr] = session_id
+                migrated_items.append("session")
 
             if old_addr in self.client_chunk_counters:
-                old_chunk = self.client_chunk_counters.pop(old_addr)
-                self.client_chunk_counters[new_addr] = old_chunk
-                print(f"  ✅ 迁移chunk计数器: {old_chunk}")
+                chunk_count = self.client_chunk_counters.pop(old_addr)
+                self.client_chunk_counters[new_addr] = chunk_count
+                migrated_items.append("chunk计数器")
 
             if old_addr in self.client_interrupt_cooldown:
                 self.client_interrupt_cooldown[new_addr] = self.client_interrupt_cooldown.pop(old_addr)
-                print(f"  ✅ 迁移打断冷却")
+                migrated_items.append("打断冷却")
 
             if old_addr in self.client_states:
                 old_state = self.client_states.pop(old_addr)
                 self.client_states[new_addr] = old_state
-                print(f"  ✅ 迁移统一状态: session={old_state.get('active_session', '')}, chunk={old_state.get('current_chunk', 0)}")
-            else:
-                print(f"  ⚠️ 旧地址没有统一状态记录: {old_addr}")
+                migrated_items.append("统一状态")
+
+            # 单行汇总日志，减少输出延迟
+            elapsed = time.time() - start_time
+            print(f"  ✅ 迁移完成 ({elapsed:.3f}s): {', '.join(migrated_items)} | session={session_id}, chunk={chunk_count}")
 
         if old_addr in self.fragment_cache:
             self.fragment_cache[new_addr] = self.fragment_cache.pop(old_addr)
