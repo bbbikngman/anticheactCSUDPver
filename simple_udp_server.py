@@ -754,9 +754,11 @@ class UDPVoiceServer:
                 elif compression_type == ADPCMProtocol.CONTROL_RESET:
                     self.reset_client_session(addr)
                 elif compression_type == ADPCMProtocol.CONTROL_HELLO:
-                    # 客户端连接信号，发送开场白
-                    if addr not in self.client_welcomed:
-                        self.client_welcomed.add(addr)
+                    # 客户端连接信号，发送开场白（基于IP判断，避免重复）
+                    client_ip = addr[0]
+                    if client_ip not in self.client_welcomed:
+                        self.client_welcomed.add(client_ip)
+                        print(f"🎉 新客户端IP首次连接(HELLO): {client_ip}")
                         self._send_opening_statement(addr)
                 else:
                     # 其他类型暂不处理
@@ -863,6 +865,7 @@ if __name__ == "__main__":
         print("  输入 'reset <ip>:<port>' 重置指定客户端")
         print("  输入 'welcome <ip>' 重置指定IP的欢迎状态")
         print("  输入 'cleanup' 手动清理超时客户端")
+        print("  输入 'cooldown' 重置异常冷却时间")
 
         while True:
             try:
@@ -896,6 +899,16 @@ if __name__ == "__main__":
                             print("格式错误，请使用: welcome <ip>")
                     elif cmd == 'cleanup':
                         server.cleanup_inactive_clients()
+                        print("✅ 手动清理完成")
+                    elif cmd == 'cooldown':
+                        # 重置所有客户端的冷却时间
+                        now = time.time()
+                        reset_count = 0
+                        for addr in server.client_states:
+                            if server.client_states[addr]['interrupt_cooldown'] > now + 10:
+                                server.client_states[addr]['interrupt_cooldown'] = 0.0
+                                reset_count += 1
+                        print(f"✅ 重置了 {reset_count} 个客户端的异常冷却时间")
                 else:
                     time.sleep(0.1)
             except:
