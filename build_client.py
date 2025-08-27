@@ -27,18 +27,31 @@ def build_client():
     cmd = [
         "pyinstaller",
         "--onefile",                    # 打包为单个EXE文件
-        "--windowed",                   # 无控制台窗口
+        "--console",                    # 保留控制台窗口以便调试
         "--name=VoiceClient",           # EXE文件名
-        "--icon=icon.ico",              # 图标文件（如果存在）
         "--add-data=client_config.json;.",  # 包含配置文件
         "--hidden-import=numpy",        # 确保numpy被包含
+        "--hidden-import=numpy._core",  # numpy核心模块
+        "--hidden-import=numpy._core._exceptions",  # numpy异常模块
         "--hidden-import=sounddevice",  # 确保sounddevice被包含
         "--hidden-import=pygame",       # 确保pygame被包含
         "--hidden-import=websockets",   # 确保websockets被包含
+        "--hidden-import=tkinter",      # 确保tkinter被包含
+        "--hidden-import=audioop",      # 音频操作模块
+        "--hidden-import=threading",    # 线程模块
+        "--hidden-import=json",         # JSON模块
+        "--collect-all=numpy",          # 收集numpy的所有依赖
         "--collect-all=sounddevice",    # 收集sounddevice的所有依赖
         "--collect-all=pygame",         # 收集pygame的所有依赖
+        "--collect-all=tkinter",        # 收集tkinter的所有依赖
         "gui_udp_client.py"            # 主程序文件
     ]
+
+    # 如果图标文件存在，添加图标参数
+    if os.path.exists("assets/app.ico"):
+        cmd.insert(-1, "--icon=assets/app.ico")
+    elif os.path.exists("icon.ico"):
+        cmd.insert(-1, "--icon=icon.ico")
     
     print(f"🔨 执行打包命令: {' '.join(cmd)}")
     
