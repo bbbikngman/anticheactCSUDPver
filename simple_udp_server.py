@@ -812,7 +812,15 @@ class UDPVoiceServer:
                     compression_type, payload = ADPCMProtocol.unpack_audio_packet(pkt)
 
                 if compression_type == ADPCMProtocol.COMPRESSION_ADPCM:
-                    print(f"🎤 收到ADPCM音频包: {addr}, 大小={len(payload)}字节")
+                    # 降低日志频率：每10个包记录一次
+                    if not hasattr(self, '_audio_packet_count'):
+                        self._audio_packet_count = {}
+                    if addr not in self._audio_packet_count:
+                        self._audio_packet_count[addr] = 0
+                    self._audio_packet_count[addr] += 1
+
+                    if self._audio_packet_count[addr] % 10 == 1:
+                        print(f"🎤 收到ADPCM音频包: {addr}, 大小={len(payload)}字节 (第{self._audio_packet_count[addr]}个)")
 
                     # 处理地址变化（端口可能变化）
                     addr = self._handle_client_address_change(addr)
@@ -831,9 +839,11 @@ class UDPVoiceServer:
 
                     codec = self._get_client_codec(addr)
                     try:
-                        print(f"🔄 开始ADPCM解码: payload={len(payload)}字节")
+                        if self._audio_packet_count[addr] % 10 == 1:
+                            print(f"🔄 开始ADPCM解码: payload={len(payload)}字节")
                         float_block = codec.decode(payload)  # float32 PCM ~512
-                        print(f"✅ ADPCM解码完成: 输出={len(float_block)}采样")
+                        if self._audio_packet_count[addr] % 10 == 1:
+                            print(f"✅ ADPCM解码完成: 输出={len(float_block)}采样")
 
                         # 检查解码结果
                         if len(float_block) == 0:
@@ -846,11 +856,13 @@ class UDPVoiceServer:
                         q = self._get_client_queue(addr)
                         try:
                             q.put_nowait(float_block)
-                            print(f"📥 音频块已入队: {addr}, 队列大小={q.qsize()}")
+                            if self._audio_packet_count[addr] % 10 == 1:
+                                print(f"📥 音频块已入队: {addr}, 队列大小={q.qsize()}")
                         except queue.Full:
                             _ = q.get_nowait()
                             q.put_nowait(float_block)
-                            print(f"📥 音频块已入队(替换): {addr}, 队列大小={q.qsize()}")
+                            if self._audio_packet_count[addr] % 10 == 1:
+                                print(f"📥 音频块已入队(替换): {addr}, 队列大小={q.qsize()}")
 
                     except Exception as e:
                         print(f"❌ ADPCM解码失败: {e}, payload大小: {len(payload)}")
@@ -879,12 +891,19 @@ class UDPVoiceServer:
                 for addr, q in list(self.client_queues.items()):
                     # 拉取尽可能多的块（但不阻塞）
                     processed_any = False
-                    if not q.empty():
-                        print(f"🔄 处理客户端音频队列: {addr}, 队列大小={q.qsize()}")
+                    # 降低处理循环日志频率
+                    if not hasattr(self, '_process_count'):
+                        self._process_count = {}
+                    if addr not in self._process_count:
+                        self._process_count[addr] = 0
+
                     while not q.empty():
                         float_block = q.get_nowait()
                         processed_any = True
-                        print(f"📤 从队列取出音频块: {addr}, 大小={len(float_block)}采样")
+                        self._process_count[addr] += 1
+
+                        if self._process_count[addr] % 10 == 1:
+                            print(f"🔄 处理音频块: {addr}, 大小={len(float_block)}采样 (第{self._process_count[addr]}个)")
 
                         # 检查音频块大小
                         if len(float_block) < 400:  # 放宽限制，400采样以上都接受
@@ -897,17 +916,20 @@ class UDPVoiceServer:
                                 padded_block = np.zeros(512, dtype=np.float32)
                                 padded_block[:len(float_block)] = float_block
                                 is_speech = self.vad.is_speech(padded_block)
-                                print(f"🎙️ VAD检测(填充): {len(float_block)}→512采样, 结果={is_speech}")
+                                if self._process_count[addr] % 10 == 1:
+                                    print(f"🎙️ VAD检测(填充): {len(float_block)}→512采样, 结果={is_speech}")
                             else:
                                 is_speech = self.vad.is_speech(float_block)
-                                print(f"🎙️ VAD检测: {len(float_block)}采样, 结果={is_speech}")
+                                if self._process_count[addr] % 10 == 1:
+                                    print(f"🎙️ VAD检测: {len(float_block)}采样, 结果={is_speech}")
                         except Exception as e:
                             print(f"❌ VAD处理失败: {e}, 音频块大小: {len(float_block)}")
                             continue
 
                         try:
                             handler = self._get_client_handler(addr)
-                            print(f"🔄 音频处理器处理: {addr}, is_speech={is_speech}")
+                            if self._process_count[addr] % 10 == 1:
+                                print(f"🔄 音频处理器处理: {addr}, is_speech={is_speech}")
                             # 音频处理器也可能需要固定大小，使用填充后的块
                             if len(float_block) < 512:
                                 padded_block = np.zeros(512, dtype=np.float32)
@@ -915,7 +937,8 @@ class UDPVoiceServer:
                                 triggered = handler.process_chunk(padded_block, is_speech)
                             else:
                                 triggered = handler.process_chunk(float_block, is_speech)
-                            print(f"🔄 音频处理器结果: triggered={triggered is not None}")
+                            if self._process_count[addr] % 10 == 1:
+                                print(f"🔄 音频处理器结果: triggered={triggered is not None}")
                         except Exception as e:
                             print(f"❌ 音频处理失败: {e}, 音频块大小: {len(float_block)}")
                             continue
