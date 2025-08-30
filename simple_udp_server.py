@@ -812,6 +812,8 @@ class UDPVoiceServer:
                     compression_type, payload = ADPCMProtocol.unpack_audio_packet(pkt)
 
                 if compression_type == ADPCMProtocol.COMPRESSION_ADPCM:
+                    print(f"🎤 收到ADPCM音频包: {addr}, 大小={len(payload)}字节")
+
                     # 处理地址变化（端口可能变化）
                     addr = self._handle_client_address_change(addr)
 
@@ -829,7 +831,9 @@ class UDPVoiceServer:
 
                     codec = self._get_client_codec(addr)
                     try:
+                        print(f"🔄 开始ADPCM解码: payload={len(payload)}字节")
                         float_block = codec.decode(payload)  # float32 PCM ~512
+                        print(f"✅ ADPCM解码完成: 输出={len(float_block)}采样")
 
                         # 检查解码结果
                         if len(float_block) == 0:
@@ -842,9 +846,11 @@ class UDPVoiceServer:
                         q = self._get_client_queue(addr)
                         try:
                             q.put_nowait(float_block)
+                            print(f"📥 音频块已入队: {addr}, 队列大小={q.qsize()}")
                         except queue.Full:
                             _ = q.get_nowait()
                             q.put_nowait(float_block)
+                            print(f"📥 音频块已入队(替换): {addr}, 队列大小={q.qsize()}")
 
                     except Exception as e:
                         print(f"❌ ADPCM解码失败: {e}, payload大小: {len(payload)}")
@@ -873,9 +879,12 @@ class UDPVoiceServer:
                 for addr, q in list(self.client_queues.items()):
                     # 拉取尽可能多的块（但不阻塞）
                     processed_any = False
+                    if not q.empty():
+                        print(f"🔄 处理客户端音频队列: {addr}, 队列大小={q.qsize()}")
                     while not q.empty():
                         float_block = q.get_nowait()
                         processed_any = True
+                        print(f"📤 从队列取出音频块: {addr}, 大小={len(float_block)}采样")
 
                         # 检查音频块大小
                         if len(float_block) < 400:  # 放宽限制，400采样以上都接受
@@ -956,6 +965,19 @@ class UDPVoiceServer:
 
 if __name__ == "__main__":
     server = UDPVoiceServer(port=UDP_PORT)
+
+    # 临时：启动时清理所有客户端状态
+    print("🧹 启动时清理所有客户端状态...")
+    server.client_codecs.clear()
+    server.client_queues.clear()
+    server.client_handlers.clear()
+    server.client_ai.clear()
+    server.client_last_activity.clear()
+    server.client_welcomed.clear()
+    server.client_sessions.clear()
+    server.client_chunk_counters.clear()
+    print("✅ 客户端状态已清理")
+
     server.start()
     try:
         print("服务器运行中... 按 Ctrl+C 停止")
